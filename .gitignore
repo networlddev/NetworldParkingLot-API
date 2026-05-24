@@ -1,0 +1,24 @@
+﻿# Visual Studio local files
+.vs/
+**/.vs/
+
+# Build output
+bin/
+obj/
+**/bin/
+**/obj/
+
+# User-specific Visual Studio files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Logs
+*.log
+
+# Runtime uploaded files
+wwwroot/uploads/**
+!wwwroot/uploads/
+!wwwroot/uploads/**/
+!wwwroot/uploads/**/.gitkeep

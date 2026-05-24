@@ -1,0 +1,50 @@
+@baseUrl = https://localhost:7001
+
+### Summary
+GET {{baseUrl}}/api/gate-operation/summary
+
+### Search companies
+GET {{baseUrl}}/api/gate-operation/companies/search?searchText=Company
+
+### Check company
+POST {{baseUrl}}/api/gate-operation/entry/check-company
+Content-Type: application/json
+
+{
+  "searchText": "COMP-001",
+  "operatorId": 1
+}
+
+### Generate barcode
+POST {{baseUrl}}/api/gate-operation/entry/generate-barcode
+Content-Type: application/json
+
+{
+  "companyId": 1,
+  "plateNo": "DXB 45821",
+  "vehicleType": "Car",
+  "driverName": "",
+  "driverMobile": "",
+  "remarks": "",
+  "allowPaymentDueWarning": true,
+  "operatorId": 1
+}
+
+### Allow entry
+POST {{baseUrl}}/api/gate-operation/entry/allow
+Content-Type: application/json
+
+{
+  "sessionId": 1,
+  "allowPaymentDueWarning": true,
+  "operatorId": 1
+}
+
+### Scan exit
+POST {{baseUrl}}/api/gate-operation/exit/scan
+Content-Type: application/json
+
+{
+  "barcodeNo": "KP260520000001",
+  "operatorId": 1
+}
