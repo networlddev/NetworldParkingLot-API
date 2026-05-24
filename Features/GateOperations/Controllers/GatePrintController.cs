@@ -183,6 +183,49 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         }
     }
 
+    [HttpGet("invoice-command")]
+    public async Task<ActionResult<ApiResponse<InvoiceCommandPrintDto>>> GetInvoiceCommand(
+        [FromQuery] int? invoiceId,
+        [FromQuery] string? invoiceNo,
+        [FromQuery] int? copies,
+        [FromQuery] string? printerName,
+        CancellationToken cancellationToken)
+    {
+        if (!invoiceId.HasValue && string.IsNullOrWhiteSpace(invoiceNo))
+            return BadRequest(ApiResponse<InvoiceCommandPrintDto>.Fail("InvoiceId or InvoiceNo is required."));
+
+        var cleanInvoiceNo = string.IsNullOrWhiteSpace(invoiceNo) ? string.Empty : invoiceNo.Trim();
+
+        var invoice = await db.ParkingInvoices
+            .AsNoTracking()
+            .Include(x => x.Company)
+            .FirstOrDefaultAsync(x =>
+                (invoiceId.HasValue && x.InvoiceId == invoiceId.Value) ||
+                (!string.IsNullOrWhiteSpace(cleanInvoiceNo) && x.InvoiceNo == cleanInvoiceNo), cancellationToken);
+
+        if (invoice == null)
+            return NotFound(ApiResponse<InvoiceCommandPrintDto>.Fail("Invoice not found."));
+
+        var settings = await db.SystemSettings
+            .AsNoTracking()
+            .ToDictionaryAsync(x => x.SettingKey, x => x.SettingValue, cancellationToken);
+
+        var selectedPrinter = string.IsNullOrWhiteSpace(printerName)
+            ? ReadString(settings, "InvoicePrinterName", string.Empty)
+            : printerName.Trim();
+
+        var command = BuildReceiptInvoice(invoice, Math.Clamp(copies ?? 1, 1, 5));
+        var dto = new InvoiceCommandPrintDto
+        {
+            InvoiceId = invoice.InvoiceId,
+            InvoiceNo = invoice.InvoiceNo,
+            PrinterName = selectedPrinter,
+            Command = command
+        };
+
+        return Ok(ApiResponse<InvoiceCommandPrintDto>.Ok(dto, "Invoice print command generated."));
+    }
+
     [HttpPost("invoice")]
     public async Task<ActionResult<ApiResponse<PrintJobResultDto>>> PrintInvoice([FromBody] PrintInvoiceRequest request, CancellationToken cancellationToken)
     {
@@ -288,7 +331,7 @@ PRINT {copies},1
         var sb = new System.Text.StringBuilder();
         for (var i = 0; i < copies; i++)
         {
-            sb.AppendLine("NETWORLD PARKING LOT");
+            sb.AppendLine("NETWORLD SMART PARKING");
             sb.AppendLine("PARKING INVOICE");
             sb.AppendLine("--------------------------------");
             sb.AppendLine($"Invoice No : {invoice.InvoiceNo}");
@@ -305,9 +348,14 @@ PRINT {copies},1
             sb.AppendLine($"Paid       : AED {invoice.PaidAmount:n2}");
             sb.AppendLine($"Balance    : AED {invoice.BalanceAmount:n2}");
             sb.AppendLine("--------------------------------");
-            sb.AppendLine($"Status     : {invoice.Status}");
+            var printStatus = invoice.BalanceAmount <= 0 ? "Paid" : invoice.PaidAmount > 0 ? "Partial" : "Unpaid";
+            sb.AppendLine($"Status     : {printStatus}");
             sb.AppendLine("Thank you");
-            sb.AppendLine("\n\n\n");
+            sb.AppendLine();
+            sb.AppendLine();
+            sb.AppendLine();
+            sb.Append("\x1B\x64\x06");      // Feed 6 lines.
+            sb.Append("\x1D\x56\x42\x00");  // Feed and cut for ESC/POS printers.
         }
         return sb.ToString();
     }
