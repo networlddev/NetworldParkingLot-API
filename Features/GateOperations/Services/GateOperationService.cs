@@ -1,4 +1,5 @@
 using System.Data;
+using System.Net.Mail;
 using Microsoft.EntityFrameworkCore;
 using NetworldParkingLot.Api.Data;
 using NetworldParkingLot.Api.Domain.Constants;
@@ -79,6 +80,217 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         }
 
         return result;
+    }
+
+    public async Task<PagedResultDto<CompanyListItemDto>> GetCompaniesAsync(CompanyListQueryRequest request, CancellationToken cancellationToken = default)
+    {
+        request.Page = Math.Max(request.Page, 1);
+        request.PageSize = Math.Clamp(request.PageSize, 10, 100);
+
+        var all = await BuildCompanyListItemsAsync(request, cancellationToken);
+        var sorted = SortCompanies(all, request.SortBy, request.SortDirection).ToList();
+        var total = sorted.Count;
+        var totalPages = Math.Max((int)Math.Ceiling(total / (double)request.PageSize), 1);
+        var page = Math.Min(request.Page, totalPages);
+        var items = sorted
+            .Skip((page - 1) * request.PageSize)
+            .Take(request.PageSize)
+            .ToList();
+
+        return new PagedResultDto<CompanyListItemDto>(
+            items,
+            page,
+            request.PageSize,
+            total,
+            totalPages,
+            sorted.Sum(x => x.PendingAmount),
+            sorted.Sum(x => x.PurchasedSlots),
+            sorted.Sum(x => x.VehiclesInside),
+            sorted.Sum(x => x.AvailableSlots));
+    }
+
+    public async Task<IReadOnlyList<CompanyListItemDto>> ExportCompaniesAsync(CompanyListQueryRequest request, CancellationToken cancellationToken = default)
+    {
+        request.Page = 1;
+        request.PageSize = 5000;
+        var all = await BuildCompanyListItemsAsync(request, cancellationToken);
+        return SortCompanies(all, request.SortBy, request.SortDirection).Take(5000).ToList();
+    }
+
+    public async Task<CompanyListItemDto> CreateCompanyWithSubscriptionAsync(CreateCompanyWithSubscriptionRequest request, CancellationToken cancellationToken = default)
+    {
+        var companyName = (request.CompanyName ?? string.Empty).Trim();
+        if (companyName.Length == 0)
+            throw new InvalidOperationException("Company name is required.");
+
+        ValidateCompanyContact(request.Mobile, request.Email);
+
+        var planType = NormalizeExtraSlotPlanType(request.PlanType);
+        var settings = await repository.GetSettingsAsync(cancellationToken);
+        var ratePerSlot = GetExtraSlotRate(settings, planType);
+        if (ratePerSlot <= 0)
+            throw new InvalidOperationException($"{planType} subscription rate is not configured. Please update settings first.");
+
+        var companyCode = (request.CompanyCode ?? string.Empty).Trim().ToUpperInvariant();
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+
+        if (companyCode.Length == 0)
+            companyCode = await GenerateNextCompanyCodeAsync(cancellationToken);
+
+        var duplicateCode = await db.ParkingCompanies.AnyAsync(x => x.CompanyCode == companyCode, cancellationToken);
+        if (duplicateCode)
+            throw new InvalidOperationException($"Company code {companyCode} already exists.");
+
+        var duplicateName = await db.ParkingCompanies.AnyAsync(x => x.CompanyName == companyName, cancellationToken);
+        if (duplicateName)
+            throw new InvalidOperationException($"Company name {companyName} already exists.");
+
+        var startDate = request.StartDate == default ? DateTime.Today : request.StartDate.Date;
+        var endDate = CalculateExtraSlotEndDate(planType, startDate);
+        var subTotal = request.SlotsPurchased * ratePerSlot;
+        var total = subTotal - request.DiscountAmount + request.VatAmount;
+        if (total < 0)
+            throw new InvalidOperationException("Invoice total cannot be negative.");
+
+        var paid = Math.Min(Math.Max(request.PaidAmount, 0), total);
+        var balance = total - paid;
+
+        var company = new ParkingCompany
+        {
+            CompanyCode = companyCode,
+            CompanyName = companyName,
+            ContactPerson = TrimOrNull(request.ContactPerson),
+            Mobile = TrimOrNull(request.Mobile),
+            Email = TrimOrNull(request.Email),
+            Address = TrimOrNull(request.Address),
+            TradeLicenseNo = TrimOrNull(request.TradeLicenseNo),
+            Trn = TrimOrNull(request.Trn),
+            Status = NormalizeCompanyStatus(request.Status),
+            OpeningBalance = Math.Max(request.OpeningBalance, 0),
+            BillingName = TrimOrNull(request.BillingName),
+            PaymentTerms = TrimOrNull(request.PaymentTerms),
+            CreditLimit = Math.Max(request.CreditLimit, 0),
+            Remarks = TrimOrNull(request.Remarks),
+            InternalNotes = TrimOrNull(request.InternalNotes),
+            CreatedBy = request.OperatorId,
+            CreatedDate = DateTime.Now
+        };
+
+        await db.ParkingCompanies.AddAsync(company, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+
+        var subscription = new ParkingSubscription
+        {
+            CompanyId = company.CompanyId,
+            PlanType = planType,
+            SlotsPurchased = request.SlotsPurchased,
+            RatePerSlot = ratePerSlot,
+            StartDate = startDate,
+            EndDate = endDate,
+            DiscountAmount = request.DiscountAmount,
+            VatAmount = request.VatAmount,
+            TotalAmount = total,
+            PaidAmount = paid,
+            BalanceAmount = balance,
+            Status = ParkingConstants.SubscriptionStatus.Active,
+            IsExtraSlot = false,
+            CreatedBy = request.OperatorId,
+            CreatedDate = DateTime.Now
+        };
+
+        await db.ParkingSubscriptions.AddAsync(subscription, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+
+        var invoiceNo = await GenerateNextInvoiceNoAsync(cancellationToken);
+        var invoice = new ParkingInvoice
+        {
+            InvoiceNo = invoiceNo,
+            CompanyId = company.CompanyId,
+            SubscriptionId = subscription.SubscriptionId,
+            InvoiceType = "Subscription",
+            InvoiceDate = DateTime.Now,
+            DueDate = endDate,
+            PlanType = planType,
+            Slots = request.SlotsPurchased,
+            SubTotal = subTotal,
+            DiscountAmount = request.DiscountAmount,
+            VatAmount = request.VatAmount,
+            TotalAmount = total,
+            PaidAmount = paid,
+            BalanceAmount = balance,
+            Status = GetInvoiceStatus(balance, paid),
+            Remarks = $"Initial {planType} subscription created with company.",
+            CreatedBy = request.OperatorId,
+            CreatedDate = DateTime.Now
+        };
+
+        await db.ParkingInvoices.AddAsync(invoice, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        subscription.SourceInvoiceId = invoice.InvoiceId;
+
+        if (paid > 0)
+        {
+            var receiptNo = await GenerateNextReceiptNoAsync(cancellationToken);
+            await db.ParkingPayments.AddAsync(new ParkingPayment
+            {
+                ReceiptNo = receiptNo,
+                CompanyId = company.CompanyId,
+                InvoiceId = invoice.InvoiceId,
+                PaymentType = "Subscription",
+                Amount = paid,
+                PaymentMode = request.PaymentMode,
+                ReferenceNo = request.ReferenceNo,
+                ReceivedBy = request.OperatorId,
+                PaymentDate = DateTime.Now,
+                Remarks = "Payment collected while creating company subscription."
+            }, cancellationToken);
+        }
+
+        await AddActivityAsync("CompanyCreated", company.CompanyId, null, null, null, "Company Created", $"Company {company.CompanyName} created with {planType} subscription.", request.OperatorId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
+        var filter = new CompanyListQueryRequest { SearchText = company.CompanyCode, Page = 1, PageSize = 1 };
+        return (await BuildCompanyListItemsAsync(filter, cancellationToken)).First();
+    }
+
+    public async Task<CompanyListItemDto> UpdateCompanyAsync(int companyId, UpdateCompanyRequest request, CancellationToken cancellationToken = default)
+    {
+        var company = await db.ParkingCompanies.FirstOrDefaultAsync(x => x.CompanyId == companyId, cancellationToken)
+            ?? throw new InvalidOperationException("Company not found.");
+
+        var companyName = (request.CompanyName ?? string.Empty).Trim();
+        if (companyName.Length == 0)
+            throw new InvalidOperationException("Company name is required.");
+
+        ValidateCompanyContact(request.Mobile, request.Email);
+
+        var duplicateName = await db.ParkingCompanies.AnyAsync(x => x.CompanyId != companyId && x.CompanyName == companyName, cancellationToken);
+        if (duplicateName)
+            throw new InvalidOperationException($"Company name {companyName} already exists.");
+
+        company.CompanyName = companyName;
+        company.ContactPerson = TrimOrNull(request.ContactPerson);
+        company.Mobile = TrimOrNull(request.Mobile);
+        company.Email = TrimOrNull(request.Email);
+        company.Address = TrimOrNull(request.Address);
+        company.TradeLicenseNo = TrimOrNull(request.TradeLicenseNo);
+        company.Trn = TrimOrNull(request.Trn);
+        company.Status = NormalizeCompanyStatus(request.Status);
+        company.OpeningBalance = Math.Max(request.OpeningBalance, 0);
+        company.BillingName = TrimOrNull(request.BillingName);
+        company.PaymentTerms = TrimOrNull(request.PaymentTerms);
+        company.CreditLimit = Math.Max(request.CreditLimit, 0);
+        company.Remarks = TrimOrNull(request.Remarks);
+        company.InternalNotes = TrimOrNull(request.InternalNotes);
+        company.ModifiedBy = request.OperatorId;
+        company.ModifiedDate = DateTime.Now;
+
+        await AddActivityAsync("CompanyUpdated", company.CompanyId, null, null, null, "Company Updated", $"Company {company.CompanyName} updated.", request.OperatorId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+
+        var filter = new CompanyListQueryRequest { SearchText = company.CompanyCode, Page = 1, PageSize = 1 };
+        return (await BuildCompanyListItemsAsync(filter, cancellationToken)).First();
     }
 
     public async Task<CompanyGateStatusDto> CheckCompanyAsync(CheckCompanyRequest request, CancellationToken cancellationToken = default)
@@ -599,6 +811,193 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         return item == null ? null : new OutsideDisplayDto(item.DisplayEventId, item.BarcodeNo, item.PlateNo, item.CompanyName, item.DisplayStatus, item.MainMessage, item.SubMessage, item.AmountDue, item.OverstayDays, item.CreatedDate);
     }
 
+    private async Task<IReadOnlyList<CompanyListItemDto>> BuildCompanyListItemsAsync(CompanyListQueryRequest request, CancellationToken cancellationToken)
+    {
+        var today = DateTime.Today;
+        var search = (request.SearchText ?? string.Empty).Trim();
+        var query = db.ParkingCompanies.AsNoTracking().AsQueryable();
+
+        if (search.Length > 0)
+        {
+            query = query.Where(x =>
+                x.CompanyCode.Contains(search) ||
+                x.CompanyName.Contains(search) ||
+                (x.ContactPerson != null && x.ContactPerson.Contains(search)) ||
+                (x.Mobile != null && x.Mobile.Contains(search)) ||
+                (x.Email != null && x.Email.Contains(search)) ||
+                (x.TradeLicenseNo != null && x.TradeLicenseNo.Contains(search)) ||
+                (x.Trn != null && x.Trn.Contains(search)));
+        }
+
+        var status = (request.Status ?? string.Empty).Trim();
+        if (status.Length > 0 && !status.Equals("All", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.Status == status);
+
+        if (request.CreatedFrom.HasValue)
+            query = query.Where(x => x.CreatedDate >= request.CreatedFrom.Value.Date);
+        if (request.CreatedTo.HasValue)
+            query = query.Where(x => x.CreatedDate < request.CreatedTo.Value.Date.AddDays(1));
+
+        var companies = await query
+            .OrderBy(x => x.CompanyName)
+            .Take(5000)
+            .ToListAsync(cancellationToken);
+
+        if (companies.Count == 0)
+            return [];
+
+        var ids = companies.Select(x => x.CompanyId).ToList();
+
+        var subscriptions = await db.ParkingSubscriptions
+            .AsNoTracking()
+            .Where(x => ids.Contains(x.CompanyId))
+            .ToListAsync(cancellationToken);
+
+        var activeSubscriptions = subscriptions
+            .Where(x => x.Status == ParkingConstants.SubscriptionStatus.Active && x.StartDate.Date <= today && x.EndDate.Date >= today)
+            .ToList();
+
+        var slotsByCompany = activeSubscriptions
+            .GroupBy(x => x.CompanyId)
+            .ToDictionary(x => x.Key, x => x.Sum(y => y.SlotsPurchased));
+
+        var bestSubByCompany = subscriptions
+            .GroupBy(x => x.CompanyId)
+            .ToDictionary(
+                x => x.Key,
+                x => x.OrderByDescending(y => y.EndDate).ThenByDescending(y => y.SubscriptionId).First());
+
+        var activeSubByCompany = activeSubscriptions
+            .GroupBy(x => x.CompanyId)
+            .ToDictionary(
+                x => x.Key,
+                x => x.OrderByDescending(y => y.EndDate).ThenByDescending(y => y.SubscriptionId).First());
+
+        var insideByCompany = await db.ParkingSessions
+            .AsNoTracking()
+            .Where(x => ids.Contains(x.CompanyId) && x.Status == ParkingConstants.SessionStatus.Inside)
+            .GroupBy(x => x.CompanyId)
+            .Select(x => new { CompanyId = x.Key, Count = x.Count() })
+            .ToDictionaryAsync(x => x.CompanyId, x => x.Count, cancellationToken);
+
+        var invoiceStats = await db.ParkingInvoices
+            .AsNoTracking()
+            .Where(x => ids.Contains(x.CompanyId))
+            .GroupBy(x => x.CompanyId)
+            .Select(x => new
+            {
+                CompanyId = x.Key,
+                PendingAmount = x.Sum(y => y.BalanceAmount > 0 ? y.BalanceAmount : 0),
+                HasOverdue = x.Any(y => y.BalanceAmount > 0 && y.DueDate.HasValue && y.DueDate.Value < today),
+                HasPartial = x.Any(y => y.BalanceAmount > 0 && y.PaidAmount > 0),
+                LastInvoiceDate = x.Max(y => (DateTime?)y.InvoiceDate)
+            })
+            .ToDictionaryAsync(x => x.CompanyId, cancellationToken);
+
+        var items = new List<CompanyListItemDto>();
+        foreach (var company in companies)
+        {
+            activeSubByCompany.TryGetValue(company.CompanyId, out var activeSub);
+            bestSubByCompany.TryGetValue(company.CompanyId, out var bestSub);
+            invoiceStats.TryGetValue(company.CompanyId, out var stat);
+
+            var selectedSub = activeSub ?? bestSub;
+            var slots = slotsByCompany.TryGetValue(company.CompanyId, out var slotCount) ? slotCount : 0;
+            var inside = insideByCompany.TryGetValue(company.CompanyId, out var insideCount) ? insideCount : 0;
+            var pending = stat?.PendingAmount ?? 0m;
+            var paymentStatus = pending <= 0
+                ? ParkingConstants.PaymentStatus.Paid
+                : stat?.HasOverdue == true
+                    ? ParkingConstants.PaymentStatus.Overdue
+                    : stat?.HasPartial == true
+                        ? ParkingConstants.PaymentStatus.Partial
+                        : ParkingConstants.PaymentStatus.Unpaid;
+
+            var subscriptionStatus = activeSub != null
+                ? ParkingConstants.SubscriptionStatus.Active
+                : bestSub == null
+                    ? "NoSubscription"
+                    : bestSub.EndDate.Date < today
+                        ? ParkingConstants.SubscriptionStatus.Expired
+                        : bestSub.Status;
+
+            items.Add(new CompanyListItemDto(
+                company.CompanyId,
+                company.CompanyCode,
+                company.CompanyName,
+                company.ContactPerson,
+                company.Mobile,
+                company.Email,
+                company.Address,
+                company.TradeLicenseNo,
+                company.Trn,
+                company.Status,
+                company.OpeningBalance,
+                company.BillingName,
+                company.PaymentTerms,
+                company.CreditLimit,
+                company.Remarks,
+                company.InternalNotes,
+                slots,
+                inside,
+                Math.Max(slots - inside, 0),
+                pending,
+                paymentStatus,
+                subscriptionStatus,
+                selectedSub?.PlanType,
+                selectedSub?.StartDate,
+                selectedSub?.EndDate,
+                stat?.LastInvoiceDate,
+                company.CreatedDate));
+        }
+
+        return ApplyCompanyListPostFilters(items, request).ToList();
+    }
+
+    private static IEnumerable<CompanyListItemDto> ApplyCompanyListPostFilters(IEnumerable<CompanyListItemDto> items, CompanyListQueryRequest request)
+    {
+        var paymentStatus = (request.PaymentStatus ?? string.Empty).Trim();
+        if (paymentStatus.Length > 0 && !paymentStatus.Equals("All", StringComparison.OrdinalIgnoreCase))
+            items = items.Where(x => x.PaymentStatus.Equals(paymentStatus, StringComparison.OrdinalIgnoreCase));
+
+        var subscriptionType = (request.SubscriptionType ?? string.Empty).Trim();
+        if (subscriptionType.Length > 0 && !subscriptionType.Equals("All", StringComparison.OrdinalIgnoreCase))
+            items = items.Where(x => (x.SubscriptionType ?? string.Empty).Equals(subscriptionType, StringComparison.OrdinalIgnoreCase));
+
+        var tab = (request.Tab ?? "All").Trim();
+        if (tab.Equals("Active", StringComparison.OrdinalIgnoreCase))
+            items = items.Where(x => x.Status.Equals(ParkingConstants.CompanyStatus.Active, StringComparison.OrdinalIgnoreCase));
+        else if (tab.Equals("Blocked", StringComparison.OrdinalIgnoreCase))
+            items = items.Where(x => !x.Status.Equals(ParkingConstants.CompanyStatus.Active, StringComparison.OrdinalIgnoreCase));
+        else if (tab.Equals("Pending", StringComparison.OrdinalIgnoreCase))
+            items = items.Where(x => x.PendingAmount > 0);
+        else if (tab.Equals("Overdue", StringComparison.OrdinalIgnoreCase))
+            items = items.Where(x => x.PaymentStatus.Equals(ParkingConstants.PaymentStatus.Overdue, StringComparison.OrdinalIgnoreCase));
+        else if (tab.Equals("Expired", StringComparison.OrdinalIgnoreCase))
+            items = items.Where(x => x.SubscriptionStatus.Equals(ParkingConstants.SubscriptionStatus.Expired, StringComparison.OrdinalIgnoreCase) || x.SubscriptionStatus.Equals("NoSubscription", StringComparison.OrdinalIgnoreCase));
+        else if (tab.Equals("Inside", StringComparison.OrdinalIgnoreCase))
+            items = items.Where(x => x.VehiclesInside > 0);
+
+        return items;
+    }
+
+    private static IEnumerable<CompanyListItemDto> SortCompanies(IEnumerable<CompanyListItemDto> items, string? sortBy, string? sortDirection)
+    {
+        var desc = (sortDirection ?? string.Empty).Equals("Desc", StringComparison.OrdinalIgnoreCase);
+        sortBy = (sortBy ?? string.Empty).Trim();
+
+        return sortBy.ToLowerInvariant() switch
+        {
+            "companycode" => desc ? items.OrderByDescending(x => x.CompanyCode) : items.OrderBy(x => x.CompanyCode),
+            "pendingamount" => desc ? items.OrderByDescending(x => x.PendingAmount) : items.OrderBy(x => x.PendingAmount),
+            "vehiclesinside" => desc ? items.OrderByDescending(x => x.VehiclesInside) : items.OrderBy(x => x.VehiclesInside),
+            "availableslots" => desc ? items.OrderByDescending(x => x.AvailableSlots) : items.OrderBy(x => x.AvailableSlots),
+            "createddate" => desc ? items.OrderByDescending(x => x.CreatedDate) : items.OrderBy(x => x.CreatedDate),
+            "subscriptionenddate" => desc ? items.OrderByDescending(x => x.SubscriptionEndDate) : items.OrderBy(x => x.SubscriptionEndDate),
+            _ => desc ? items.OrderByDescending(x => x.CompanyName) : items.OrderBy(x => x.CompanyName),
+        };
+    }
+
     private async Task<CompanyGateStatusDto> BuildCompanyStatusAsync(ParkingCompany company, int operatorId, CancellationToken cancellationToken)
     {
         var slots = await repository.GetActiveSlotCountAsync(company.CompanyId, cancellationToken);
@@ -848,6 +1247,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         return "KP" + DateTime.Now.ToString("yyMMdd") + counter.LastNumber.ToString("D6");
     }
 
+    private async Task<string> GenerateNextCompanyCodeAsync(CancellationToken cancellationToken) => await GenerateFromCounterAsync("CMP", "CMP", cancellationToken);
     private async Task<string> GenerateNextInvoiceNoAsync(CancellationToken cancellationToken) => await GenerateFromCounterAsync("INV", "INV", cancellationToken);
     private async Task<string> GenerateNextReceiptNoAsync(CancellationToken cancellationToken) => await GenerateFromCounterAsync("RCPT", "RCT", cancellationToken);
 
@@ -960,6 +1360,48 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
     private static string GetInvoiceStatus(decimal balance, decimal paid) =>
         balance <= 0 ? ParkingConstants.PaymentStatus.Paid : paid > 0 ? ParkingConstants.PaymentStatus.Partial : ParkingConstants.PaymentStatus.Unpaid;
+
+
+    private static void ValidateCompanyContact(string? mobile, string? email)
+    {
+        var cleanMobile = (mobile ?? string.Empty).Trim();
+        if (cleanMobile.Length > 0)
+        {
+            var allowed = cleanMobile.All(c => char.IsDigit(c) || c == '+' || c == '-' || c == ' ' || c == '(' || c == ')');
+            var digits = new string(cleanMobile.Where(char.IsDigit).ToArray());
+            if (!allowed || digits.Length < 7 || digits.Length > 15)
+                throw new InvalidOperationException("Mobile number format is invalid. Use 7 to 15 digits, optionally with +, space, hyphen or brackets.");
+        }
+
+        var cleanEmail = (email ?? string.Empty).Trim();
+        if (cleanEmail.Length > 0)
+        {
+            try
+            {
+                var address = new MailAddress(cleanEmail);
+                if (!address.Address.Equals(cleanEmail, StringComparison.OrdinalIgnoreCase))
+                    throw new FormatException();
+            }
+            catch
+            {
+                throw new InvalidOperationException("Email format is invalid.");
+            }
+        }
+    }
+
+    private static string? TrimOrNull(string? value)
+    {
+        var cleaned = (value ?? string.Empty).Trim();
+        return cleaned.Length == 0 ? null : cleaned;
+    }
+
+    private static string NormalizeCompanyStatus(string? status)
+    {
+        var value = (status ?? string.Empty).Trim();
+        if (value.Equals(ParkingConstants.CompanyStatus.Blocked, StringComparison.OrdinalIgnoreCase)) return ParkingConstants.CompanyStatus.Blocked;
+        if (value.Equals(ParkingConstants.CompanyStatus.Inactive, StringComparison.OrdinalIgnoreCase)) return ParkingConstants.CompanyStatus.Inactive;
+        return ParkingConstants.CompanyStatus.Active;
+    }
 
     private static int GetIntSetting(Dictionary<string, string> settings, string key, int defaultValue) =>
         settings.TryGetValue(key, out var value) && int.TryParse(value, out var result) ? result : defaultValue;

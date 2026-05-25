@@ -170,3 +170,43 @@ public sealed record OutsideDisplayDto(
     decimal AmountDue,
     int OverstayDays,
     DateTime CreatedDate);
+
+public sealed record PagedResultDto<T>(
+    IReadOnlyList<T> Items,
+    int Page,
+    int PageSize,
+    int TotalCount,
+    int TotalPages,
+    decimal TotalPendingAmount,
+    int TotalPurchasedSlots,
+    int TotalVehiclesInside,
+    int TotalAvailableSlots);
+
+public sealed record CompanyListItemDto(
+    int CompanyId,
+    string CompanyCode,
+    string CompanyName,
+    string? ContactPerson,
+    string? Mobile,
+    string? Email,
+    string? Address,
+    string? TradeLicenseNo,
+    string? Trn,
+    string Status,
+    decimal OpeningBalance,
+    string? BillingName,
+    string? PaymentTerms,
+    decimal CreditLimit,
+    string? Remarks,
+    string? InternalNotes,
+    int PurchasedSlots,
+    int VehiclesInside,
+    int AvailableSlots,
+    decimal PendingAmount,
+    string PaymentStatus,
+    string SubscriptionStatus,
+    string? SubscriptionType,
+    DateTime? SubscriptionStartDate,
+    DateTime? SubscriptionEndDate,
+    DateTime? LastInvoiceDate,
+    DateTime CreatedDate);

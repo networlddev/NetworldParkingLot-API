@@ -1,0 +1,217 @@
+diff --git a/Features/GateOperations/Controllers/GateOperationsController.cs b/Features/GateOperations/Controllers/GateOperationsController.cs
+index 551d1c4..5a9e4b6 100644
+--- a/Features/GateOperations/Controllers/GateOperationsController.cs
++++ b/Features/GateOperations/Controllers/GateOperationsController.cs
+@@ -101,6 +101,20 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
+         }
+     }
+ 
++    [HttpPut("companies/{companyId:int}")]
++    public async Task<ActionResult<ApiResponse<CompanyListItemDto>>> UpdateCompany(int companyId, [FromBody] UpdateCompanyRequest request, CancellationToken cancellationToken)
++    {
++        try
++        {
++            var data = await service.UpdateCompanyAsync(companyId, request, cancellationToken);
++            return Ok(ApiResponse<CompanyListItemDto>.Ok(data, "Company updated."));
++        }
++        catch (InvalidOperationException ex)
++        {
++            return BadRequest(ApiResponse<CompanyListItemDto>.Fail(ex.Message));
++        }
++    }
++
+     [HttpPost("entry/check-company")]
+     public async Task<ActionResult<ApiResponse<CompanyGateStatusDto>>> CheckCompany([FromBody] CheckCompanyRequest request, CancellationToken cancellationToken)
+     {
+diff --git a/Features/GateOperations/Dtos/GateDtos.cs b/Features/GateOperations/Dtos/GateDtos.cs
+index 7b94806..8bc7e78 100644
+--- a/Features/GateOperations/Dtos/GateDtos.cs
++++ b/Features/GateOperations/Dtos/GateDtos.cs
+@@ -176,7 +176,11 @@ public sealed record PagedResultDto<T>(
+     int Page,
+     int PageSize,
+     int TotalCount,
+-    int TotalPages);
++    int TotalPages,
++    decimal TotalPendingAmount,
++    int TotalPurchasedSlots,
++    int TotalVehiclesInside,
++    int TotalAvailableSlots);
+ 
+ public sealed record CompanyListItemDto(
+     int CompanyId,
+diff --git a/Features/GateOperations/Dtos/GateRequests.cs b/Features/GateOperations/Dtos/GateRequests.cs
+index e047d3d..ec5b9c9 100644
+--- a/Features/GateOperations/Dtos/GateRequests.cs
++++ b/Features/GateOperations/Dtos/GateRequests.cs
+@@ -193,3 +193,40 @@ public sealed class CreateCompanyWithSubscriptionRequest
+     [Range(1, int.MaxValue)]
+     public int OperatorId { get; set; }
+ }
++
++
++public sealed class UpdateCompanyRequest
++{
++    [Required]
++    [MaxLength(250)]
++    public string CompanyName { get; set; } = string.Empty;
++
++    [MaxLength(150)]
++    public string? ContactPerson { get; set; }
++
++    [MaxLength(50)]
++    public string? Mobile { get; set; }
++
++    [MaxLength(150)]
++    public string? Email { get; set; }
++
++    [MaxLength(500)]
++    public string? Address { get; set; }
++
++    [MaxLength(100)]
++    public string? TradeLicenseNo { get; set; }
++
++    [MaxLength(100)]
++    public string? Trn { get; set; }
++
++    public string Status { get; set; } = "Active";
++    public decimal OpeningBalance { get; set; }
++    public string? BillingName { get; set; }
++    public string? PaymentTerms { get; set; }
++    public decimal CreditLimit { get; set; }
++    public string? Remarks { get; set; }
++    public string? InternalNotes { get; set; }
++
++    [Range(1, int.MaxValue)]
++    public int OperatorId { get; set; }
++}
+diff --git a/Features/GateOperations/Services/GateOperationService.cs b/Features/GateOperations/Services/GateOperationService.cs
+index 63de77a..2aa0fd4 100644
+--- a/Features/GateOperations/Services/GateOperationService.cs
++++ b/Features/GateOperations/Services/GateOperationService.cs
+@@ -1,4 +1,5 @@
+ using System.Data;
++using System.Net.Mail;
+ using Microsoft.EntityFrameworkCore;
+ using NetworldParkingLot.Api.Data;
+ using NetworldParkingLot.Api.Domain.Constants;
+@@ -96,7 +97,16 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
+             .Take(request.PageSize)
+             .ToList();
+ 
+-        return new PagedResultDto<CompanyListItemDto>(items, page, request.PageSize, total, totalPages);
++        return new PagedResultDto<CompanyListItemDto>(
++            items,
++            page,
++            request.PageSize,
++            total,
++            totalPages,
++            sorted.Sum(x => x.PendingAmount),
++            sorted.Sum(x => x.PurchasedSlots),
++            sorted.Sum(x => x.VehiclesInside),
++            sorted.Sum(x => x.AvailableSlots));
+     }
+ 
+     public async Task<IReadOnlyList<CompanyListItemDto>> ExportCompaniesAsync(CompanyListQueryRequest request, CancellationToken cancellationToken = default)
+@@ -113,6 +123,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
+         if (companyName.Length == 0)
+             throw new InvalidOperationException("Company name is required.");
+ 
++        ValidateCompanyContact(request.Mobile, request.Email);
++
+         var planType = NormalizeExtraSlotPlanType(request.PlanType);
+         var settings = await repository.GetSettingsAsync(cancellationToken);
+         var ratePerSlot = GetExtraSlotRate(settings, planType);
+@@ -242,6 +254,45 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
+         return (await BuildCompanyListItemsAsync(filter, cancellationToken)).First();
+     }
+ 
++    public async Task<CompanyListItemDto> UpdateCompanyAsync(int companyId, UpdateCompanyRequest request, CancellationToken cancellationToken = default)
++    {
++        var company = await db.ParkingCompanies.FirstOrDefaultAsync(x => x.CompanyId == companyId, cancellationToken)
++            ?? throw new InvalidOperationException("Company not found.");
++
++        var companyName = (request.CompanyName ?? string.Empty).Trim();
++        if (companyName.Length == 0)
++            throw new InvalidOperationException("Company name is required.");
++
++        ValidateCompanyContact(request.Mobile, request.Email);
++
++        var duplicateName = await db.ParkingCompanies.AnyAsync(x => x.CompanyId != companyId && x.CompanyName == companyName, cancellationToken);
++        if (duplicateName)
++            throw new InvalidOperationException($"Company name {companyName} already exists.");
++
++        company.CompanyName = companyName;
++        company.ContactPerson = TrimOrNull(request.ContactPerson);
++        company.Mobile = TrimOrNull(request.Mobile);
++        company.Email = TrimOrNull(request.Email);
++        company.Address = TrimOrNull(request.Address);
++        company.TradeLicenseNo = TrimOrNull(request.TradeLicenseNo);
++        company.Trn = TrimOrNull(request.Trn);
++        company.Status = NormalizeCompanyStatus(request.Status);
++        company.OpeningBalance = Math.Max(request.OpeningBalance, 0);
++        company.BillingName = TrimOrNull(request.BillingName);
++        company.PaymentTerms = TrimOrNull(request.PaymentTerms);
++        company.CreditLimit = Math.Max(request.CreditLimit, 0);
++        company.Remarks = TrimOrNull(request.Remarks);
++        company.InternalNotes = TrimOrNull(request.InternalNotes);
++        company.ModifiedBy = request.OperatorId;
++        company.ModifiedDate = DateTime.Now;
++
++        await AddActivityAsync("CompanyUpdated", company.CompanyId, null, null, null, "Company Updated", $"Company {company.CompanyName} updated.", request.OperatorId, cancellationToken);
++        await db.SaveChangesAsync(cancellationToken);
++
++        var filter = new CompanyListQueryRequest { SearchText = company.CompanyCode, Page = 1, PageSize = 1 };
++        return (await BuildCompanyListItemsAsync(filter, cancellationToken)).First();
++    }
++
+     public async Task<CompanyGateStatusDto> CheckCompanyAsync(CheckCompanyRequest request, CancellationToken cancellationToken = default)
+     {
+         var search = request.SearchText.Trim();
+@@ -1310,6 +1361,34 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
+     private static string GetInvoiceStatus(decimal balance, decimal paid) =>
+         balance <= 0 ? ParkingConstants.PaymentStatus.Paid : paid > 0 ? ParkingConstants.PaymentStatus.Partial : ParkingConstants.PaymentStatus.Unpaid;
+ 
++
++    private static void ValidateCompanyContact(string? mobile, string? email)
++    {
++        var cleanMobile = (mobile ?? string.Empty).Trim();
++        if (cleanMobile.Length > 0)
++        {
++            var allowed = cleanMobile.All(c => char.IsDigit(c) || c == '+' || c == '-' || c == ' ' || c == '(' || c == ')');
++            var digits = new string(cleanMobile.Where(char.IsDigit).ToArray());
++            if (!allowed || digits.Length < 7 || digits.Length > 15)
++                throw new InvalidOperationException("Mobile number format is invalid. Use 7 to 15 digits, optionally with +, space, hyphen or brackets.");
++        }
++
++        var cleanEmail = (email ?? string.Empty).Trim();
++        if (cleanEmail.Length > 0)
++        {
++            try
++            {
++                var address = new MailAddress(cleanEmail);
++                if (!address.Address.Equals(cleanEmail, StringComparison.OrdinalIgnoreCase))
++                    throw new FormatException();
++            }
++            catch
++            {
++                throw new InvalidOperationException("Email format is invalid.");
++            }
++        }
++    }
++
+     private static string? TrimOrNull(string? value)
+     {
+         var cleaned = (value ?? string.Empty).Trim();
+diff --git a/Features/GateOperations/Services/IGateOperationService.cs b/Features/GateOperations/Services/IGateOperationService.cs
+index 04db279..e6ea61b 100644
+--- a/Features/GateOperations/Services/IGateOperationService.cs
++++ b/Features/GateOperations/Services/IGateOperationService.cs
+@@ -9,6 +9,7 @@ public interface IGateOperationService
+     Task<PagedResultDto<CompanyListItemDto>> GetCompaniesAsync(CompanyListQueryRequest request, CancellationToken cancellationToken = default);
+     Task<IReadOnlyList<CompanyListItemDto>> ExportCompaniesAsync(CompanyListQueryRequest request, CancellationToken cancellationToken = default);
+     Task<CompanyListItemDto> CreateCompanyWithSubscriptionAsync(CreateCompanyWithSubscriptionRequest request, CancellationToken cancellationToken = default);
++    Task<CompanyListItemDto> UpdateCompanyAsync(int companyId, UpdateCompanyRequest request, CancellationToken cancellationToken = default);
+     Task<CompanyGateStatusDto> CheckCompanyAsync(CheckCompanyRequest request, CancellationToken cancellationToken = default);
+     Task<GenerateBarcodeResponseDto> GenerateBarcodeAsync(GenerateBarcodeRequest request, CancellationToken cancellationToken = default);
+     Task<EntryResultDto> AllowEntryAsync(AllowEntryRequest request, CancellationToken cancellationToken = default);

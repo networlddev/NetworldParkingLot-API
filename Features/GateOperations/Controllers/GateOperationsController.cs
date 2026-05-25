@@ -23,6 +23,98 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
         return Ok(ApiResponse<IReadOnlyList<CompanySearchDto>>.Ok(data));
     }
 
+    [HttpGet("companies")]
+    public async Task<ActionResult<ApiResponse<PagedResultDto<CompanyListItemDto>>>> GetCompanies(
+        [FromQuery] string? searchText,
+        [FromQuery] string? tab,
+        [FromQuery] string? status,
+        [FromQuery] string? paymentStatus,
+        [FromQuery] string? subscriptionType,
+        [FromQuery] DateTime? createdFrom,
+        [FromQuery] DateTime? createdTo,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 25,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new CompanyListQueryRequest
+        {
+            SearchText = searchText,
+            Tab = tab,
+            Status = status,
+            PaymentStatus = paymentStatus,
+            SubscriptionType = subscriptionType,
+            CreatedFrom = createdFrom,
+            CreatedTo = createdTo,
+            SortBy = sortBy,
+            SortDirection = sortDirection,
+            Page = page,
+            PageSize = pageSize
+        };
+
+        var data = await service.GetCompaniesAsync(request, cancellationToken);
+        return Ok(ApiResponse<PagedResultDto<CompanyListItemDto>>.Ok(data));
+    }
+
+    [HttpGet("companies/export")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<CompanyListItemDto>>>> ExportCompanies(
+        [FromQuery] string? searchText,
+        [FromQuery] string? tab,
+        [FromQuery] string? status,
+        [FromQuery] string? paymentStatus,
+        [FromQuery] string? subscriptionType,
+        [FromQuery] DateTime? createdFrom,
+        [FromQuery] DateTime? createdTo,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new CompanyListQueryRequest
+        {
+            SearchText = searchText,
+            Tab = tab,
+            Status = status,
+            PaymentStatus = paymentStatus,
+            SubscriptionType = subscriptionType,
+            CreatedFrom = createdFrom,
+            CreatedTo = createdTo,
+            SortBy = sortBy,
+            SortDirection = sortDirection
+        };
+
+        var data = await service.ExportCompaniesAsync(request, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<CompanyListItemDto>>.Ok(data));
+    }
+
+    [HttpPost("companies")]
+    public async Task<ActionResult<ApiResponse<CompanyListItemDto>>> CreateCompany([FromBody] CreateCompanyWithSubscriptionRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.CreateCompanyWithSubscriptionAsync(request, cancellationToken);
+            return Ok(ApiResponse<CompanyListItemDto>.Ok(data, "Company and subscription created."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ApiResponse<CompanyListItemDto>.Fail(ex.Message));
+        }
+    }
+
+    [HttpPut("companies/{companyId:int}")]
+    public async Task<ActionResult<ApiResponse<CompanyListItemDto>>> UpdateCompany(int companyId, [FromBody] UpdateCompanyRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.UpdateCompanyAsync(companyId, request, cancellationToken);
+            return Ok(ApiResponse<CompanyListItemDto>.Ok(data, "Company updated."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ApiResponse<CompanyListItemDto>.Fail(ex.Message));
+        }
+    }
+
     [HttpPost("entry/check-company")]
     public async Task<ActionResult<ApiResponse<CompanyGateStatusDto>>> CheckCompany([FromBody] CheckCompanyRequest request, CancellationToken cancellationToken)
     {

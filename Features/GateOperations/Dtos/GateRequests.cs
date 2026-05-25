@@ -127,3 +127,106 @@ public sealed class CreateExtraSlotInvoiceRequest
     [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
+
+public sealed class CompanyListQueryRequest
+{
+    public string? SearchText { get; set; }
+    public string? Tab { get; set; } = "All";
+    public string? Status { get; set; }
+    public string? PaymentStatus { get; set; }
+    public string? SubscriptionType { get; set; }
+    public DateTime? CreatedFrom { get; set; }
+    public DateTime? CreatedTo { get; set; }
+    public string? SortBy { get; set; } = "CompanyName";
+    public string? SortDirection { get; set; } = "Asc";
+    public int Page { get; set; } = 1;
+    public int PageSize { get; set; } = 25;
+}
+
+public sealed class CreateCompanyWithSubscriptionRequest
+{
+    public string? CompanyCode { get; set; }
+
+    [Required]
+    [MaxLength(250)]
+    public string CompanyName { get; set; } = string.Empty;
+
+    [MaxLength(150)]
+    public string? ContactPerson { get; set; }
+
+    [MaxLength(50)]
+    public string? Mobile { get; set; }
+
+    [MaxLength(150)]
+    public string? Email { get; set; }
+
+    [MaxLength(500)]
+    public string? Address { get; set; }
+
+    [MaxLength(100)]
+    public string? TradeLicenseNo { get; set; }
+
+    [MaxLength(100)]
+    public string? Trn { get; set; }
+
+    public string Status { get; set; } = "Active";
+    public decimal OpeningBalance { get; set; }
+    public string? BillingName { get; set; }
+    public string? PaymentTerms { get; set; }
+    public decimal CreditLimit { get; set; }
+    public string? Remarks { get; set; }
+    public string? InternalNotes { get; set; }
+
+    [Required]
+    public string PlanType { get; set; } = "Monthly";
+
+    [Range(1, 100000)]
+    public int SlotsPurchased { get; set; }
+
+    public DateTime StartDate { get; set; } = DateTime.Today;
+    public decimal DiscountAmount { get; set; }
+    public decimal VatAmount { get; set; }
+    public decimal PaidAmount { get; set; }
+    public string PaymentMode { get; set; } = "Cash";
+    public string? ReferenceNo { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int OperatorId { get; set; }
+}
+
+
+public sealed class UpdateCompanyRequest
+{
+    [Required]
+    [MaxLength(250)]
+    public string CompanyName { get; set; } = string.Empty;
+
+    [MaxLength(150)]
+    public string? ContactPerson { get; set; }
+
+    [MaxLength(50)]
+    public string? Mobile { get; set; }
+
+    [MaxLength(150)]
+    public string? Email { get; set; }
+
+    [MaxLength(500)]
+    public string? Address { get; set; }
+
+    [MaxLength(100)]
+    public string? TradeLicenseNo { get; set; }
+
+    [MaxLength(100)]
+    public string? Trn { get; set; }
+
+    public string Status { get; set; } = "Active";
+    public decimal OpeningBalance { get; set; }
+    public string? BillingName { get; set; }
+    public string? PaymentTerms { get; set; }
+    public decimal CreditLimit { get; set; }
+    public string? Remarks { get; set; }
+    public string? InternalNotes { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int OperatorId { get; set; }
+}

@@ -24,6 +24,7 @@ public sealed class NetworldParkingDbContext(DbContextOptions<NetworldParkingDbC
         modelBuilder.Entity<ParkingCompany>().HasKey(x => x.CompanyId);
         modelBuilder.Entity<ParkingCompany>().HasIndex(x => x.CompanyCode).IsUnique();
         modelBuilder.Entity<ParkingCompany>().Property(x => x.OpeningBalance).HasPrecision(18, 2);
+        modelBuilder.Entity<ParkingCompany>().Property(x => x.CreditLimit).HasPrecision(18, 2);
 
         modelBuilder.Entity<ParkingSubscription>().HasKey(x => x.SubscriptionId);
         modelBuilder.Entity<ParkingSubscription>().Property(x => x.RatePerSlot).HasPrecision(18, 2);

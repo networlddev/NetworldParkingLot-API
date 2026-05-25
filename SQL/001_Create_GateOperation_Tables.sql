@@ -44,11 +44,17 @@ CREATE TABLE dbo.ParkingCompanies
     CompanyName NVARCHAR(250) NOT NULL,
     ContactPerson NVARCHAR(150) NULL,
     Mobile NVARCHAR(50) NULL,
+    TradeLicenseNo NVARCHAR(100) NULL,
+    Trn NVARCHAR(100) NULL,
     Email NVARCHAR(150) NULL,
     Address NVARCHAR(500) NULL,
     Status NVARCHAR(30) NOT NULL DEFAULT 'Active',
     OpeningBalance DECIMAL(18,2) NOT NULL DEFAULT 0,
+    BillingName NVARCHAR(250) NULL,
+    PaymentTerms NVARCHAR(100) NULL,
+    CreditLimit DECIMAL(18,2) NOT NULL DEFAULT 0,
     Remarks NVARCHAR(500) NULL,
+    InternalNotes NVARCHAR(1000) NULL,
     CreatedDate DATETIME2 NOT NULL DEFAULT SYSDATETIME(),
     CreatedBy INT NULL,
     ModifiedDate DATETIME2 NULL,
@@ -205,6 +211,8 @@ GO
 CREATE INDEX IX_ParkingSessions_Company_Status ON dbo.ParkingSessions(CompanyId, Status);
 CREATE INDEX IX_ParkingSessions_Plate_Status ON dbo.ParkingSessions(PlateNo, Status);
 CREATE INDEX IX_ParkingSessions_EntryTime ON dbo.ParkingSessions(EntryTime);
+CREATE INDEX IX_ParkingCompanies_Status_Name ON dbo.ParkingCompanies(Status, CompanyName);
+CREATE INDEX IX_ParkingSubscriptions_Company_Date ON dbo.ParkingSubscriptions(CompanyId, StartDate, EndDate, Status);
 CREATE INDEX IX_ParkingInvoices_Company_Balance ON dbo.ParkingInvoices(CompanyId, BalanceAmount);
 CREATE INDEX IX_GateActivityLogs_ActionDate ON dbo.GateActivityLogs(ActionDate DESC);
 CREATE INDEX IX_OutsideDisplayEvents_CreatedDate ON dbo.OutsideDisplayEvents(CreatedDate DESC);
