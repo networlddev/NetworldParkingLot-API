@@ -79,8 +79,14 @@ CREATE TABLE dbo.ParkingSubscriptions
     Status NVARCHAR(30) NOT NULL DEFAULT 'Active',
     IsExtraSlot BIT NOT NULL DEFAULT 0,
     SourceInvoiceId INT NULL,
+    Remarks NVARCHAR(500) NULL,
     CreatedDate DATETIME2 NOT NULL DEFAULT SYSDATETIME(),
     CreatedBy INT NULL,
+    ModifiedDate DATETIME2 NULL,
+    ModifiedBy INT NULL,
+    CancelledDate DATETIME2 NULL,
+    CancelledBy INT NULL,
+    CancellationReason NVARCHAR(500) NULL,
     CONSTRAINT FK_ParkingSubscriptions_Companies FOREIGN KEY (CompanyId) REFERENCES dbo.ParkingCompanies(CompanyId)
 );
 GO

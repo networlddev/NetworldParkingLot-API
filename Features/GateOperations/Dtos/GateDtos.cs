@@ -210,3 +210,44 @@ public sealed record CompanyListItemDto(
     DateTime? SubscriptionEndDate,
     DateTime? LastInvoiceDate,
     DateTime CreatedDate);
+
+
+public sealed record SubscriptionListItemDto(
+    int SubscriptionId,
+    int CompanyId,
+    string CompanyCode,
+    string CompanyName,
+    string PlanType,
+    int SlotsPurchased,
+    decimal RatePerSlot,
+    DateTime StartDate,
+    DateTime EndDate,
+    int DurationDays,
+    decimal DiscountAmount,
+    decimal VatAmount,
+    decimal TotalAmount,
+    decimal PaidAmount,
+    decimal BalanceAmount,
+    string PaymentStatus,
+    string Status,
+    bool IsExtraSlot,
+    int? InvoiceId,
+    string? InvoiceNo,
+    string? InvoiceStatus,
+    int VehiclesInside,
+    DateTime CreatedDate,
+    string? Remarks,
+    string? CancellationReason);
+
+public sealed record PagedSubscriptionResultDto(
+    IReadOnlyList<SubscriptionListItemDto> Items,
+    int Page,
+    int PageSize,
+    int TotalCount,
+    int TotalPages,
+    decimal TotalAmount,
+    decimal TotalPendingAmount,
+    int TotalSlots,
+    int ActiveSlots,
+    int ExpiredCount,
+    int ExpiringSoonCount);

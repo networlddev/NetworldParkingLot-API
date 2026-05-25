@@ -230,3 +230,94 @@ public sealed class UpdateCompanyRequest
     [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
+
+
+public sealed class SubscriptionListQueryRequest
+{
+    public string? SearchText { get; set; }
+    public string? Tab { get; set; } = "All";
+    public int? CompanyId { get; set; }
+    public string? PlanType { get; set; }
+    public string? Status { get; set; }
+    public string? PaymentStatus { get; set; }
+    public bool? IsExtraSlot { get; set; }
+    public DateTime? StartFrom { get; set; }
+    public DateTime? StartTo { get; set; }
+    public DateTime? EndFrom { get; set; }
+    public DateTime? EndTo { get; set; }
+    public string? SortBy { get; set; } = "EndDate";
+    public string? SortDirection { get; set; } = "Desc";
+    public int Page { get; set; } = 1;
+    public int PageSize { get; set; } = 25;
+}
+
+public sealed class CreateSubscriptionRequest
+{
+    [Range(1, int.MaxValue)]
+    public int CompanyId { get; set; }
+
+    [Required]
+    public string PlanType { get; set; } = "Monthly";
+
+    [Range(1, 100000)]
+    public int SlotsPurchased { get; set; }
+
+    public bool IsExtraSlot { get; set; }
+    public DateTime StartDate { get; set; } = DateTime.Today;
+    public DateTime? EndDate { get; set; }
+    public decimal DiscountAmount { get; set; }
+    public decimal VatAmount { get; set; }
+    public decimal PaidAmount { get; set; }
+    public string PaymentMode { get; set; } = "Cash";
+    public string? ReferenceNo { get; set; }
+    public string? Remarks { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int OperatorId { get; set; }
+}
+
+public sealed class UpdateSubscriptionRequest
+{
+    [Required]
+    public string PlanType { get; set; } = "Monthly";
+
+    [Range(1, 100000)]
+    public int SlotsPurchased { get; set; }
+
+    public bool IsExtraSlot { get; set; }
+    public DateTime StartDate { get; set; } = DateTime.Today;
+    public DateTime? EndDate { get; set; }
+    public decimal DiscountAmount { get; set; }
+    public decimal VatAmount { get; set; }
+    public string Status { get; set; } = "Active";
+    public string? Remarks { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int OperatorId { get; set; }
+}
+
+public sealed class CancelSubscriptionRequest
+{
+    public string? Reason { get; set; }
+    public bool ClearPendingInvoiceBalance { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int OperatorId { get; set; }
+}
+
+public sealed class RenewSubscriptionRequest
+{
+    public string? PlanType { get; set; }
+    public int? SlotsPurchased { get; set; }
+    public DateTime? StartDate { get; set; }
+    public DateTime? EndDate { get; set; }
+    public decimal DiscountAmount { get; set; }
+    public decimal VatAmount { get; set; }
+    public decimal PaidAmount { get; set; }
+    public string PaymentMode { get; set; } = "Cash";
+    public string? ReferenceNo { get; set; }
+    public string? Remarks { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int OperatorId { get; set; }
+}

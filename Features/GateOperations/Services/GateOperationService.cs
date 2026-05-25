@@ -293,6 +293,515 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         return (await BuildCompanyListItemsAsync(filter, cancellationToken)).First();
     }
 
+
+
+    public async Task<PagedSubscriptionResultDto> GetSubscriptionsAsync(SubscriptionListQueryRequest request, CancellationToken cancellationToken = default)
+    {
+        request.Page = Math.Max(request.Page, 1);
+        request.PageSize = Math.Clamp(request.PageSize, 10, 100);
+
+        var all = await BuildSubscriptionListItemsAsync(request, cancellationToken);
+        var sorted = SortSubscriptions(all, request.SortBy, request.SortDirection).ToList();
+        var total = sorted.Count;
+        var totalPages = Math.Max((int)Math.Ceiling(total / (double)request.PageSize), 1);
+        var page = Math.Min(request.Page, totalPages);
+        var items = sorted
+            .Skip((page - 1) * request.PageSize)
+            .Take(request.PageSize)
+            .ToList();
+
+        var today = DateTime.Today;
+        return new PagedSubscriptionResultDto(
+            items,
+            page,
+            request.PageSize,
+            total,
+            totalPages,
+            sorted.Sum(x => x.TotalAmount),
+            sorted.Sum(x => x.BalanceAmount),
+            sorted.Sum(x => x.SlotsPurchased),
+            sorted.Where(x => x.Status.Equals(ParkingConstants.SubscriptionStatus.Active, StringComparison.OrdinalIgnoreCase) && x.StartDate.Date <= today && x.EndDate.Date >= today).Sum(x => x.SlotsPurchased),
+            sorted.Count(x => x.Status.Equals(ParkingConstants.SubscriptionStatus.Expired, StringComparison.OrdinalIgnoreCase)),
+            sorted.Count(x => x.Status.Equals(ParkingConstants.SubscriptionStatus.Active, StringComparison.OrdinalIgnoreCase) && x.EndDate.Date >= today && x.EndDate.Date <= today.AddDays(7)));
+    }
+
+    public async Task<IReadOnlyList<SubscriptionListItemDto>> ExportSubscriptionsAsync(SubscriptionListQueryRequest request, CancellationToken cancellationToken = default)
+    {
+        request.Page = 1;
+        request.PageSize = 5000;
+        var all = await BuildSubscriptionListItemsAsync(request, cancellationToken);
+        return SortSubscriptions(all, request.SortBy, request.SortDirection).Take(5000).ToList();
+    }
+
+    public async Task<SubscriptionListItemDto> GetSubscriptionByIdAsync(int subscriptionId, CancellationToken cancellationToken = default)
+    {
+        var item = (await BuildSubscriptionListItemsAsync(new SubscriptionListQueryRequest(), cancellationToken))
+            .FirstOrDefault(x => x.SubscriptionId == subscriptionId);
+        return item ?? throw new InvalidOperationException("Subscription not found.");
+    }
+
+    public async Task<SubscriptionListItemDto> CreateSubscriptionAsync(CreateSubscriptionRequest request, CancellationToken cancellationToken = default)
+    {
+        var company = await db.ParkingCompanies.FirstOrDefaultAsync(x => x.CompanyId == request.CompanyId, cancellationToken)
+            ?? throw new InvalidOperationException("Company not found.");
+
+        if (!company.Status.Equals(ParkingConstants.CompanyStatus.Active, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Cannot create subscription for inactive or blocked company.");
+
+        var settings = await repository.GetSettingsAsync(cancellationToken);
+        var planType = NormalizeExtraSlotPlanType(request.PlanType);
+        var ratePerSlot = GetExtraSlotRate(settings, planType);
+        if (ratePerSlot <= 0)
+            throw new InvalidOperationException($"{planType} subscription rate is not configured. Please update settings first.");
+
+        if (request.SlotsPurchased <= 0)
+            throw new InvalidOperationException("Slots purchased must be greater than zero.");
+
+        var startDate = request.StartDate == default ? DateTime.Today : request.StartDate.Date;
+        var endDate = request.EndDate.HasValue && request.EndDate.Value.Date > startDate
+            ? request.EndDate.Value.Date
+            : CalculateExtraSlotEndDate(planType, startDate);
+
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+        var subscription = await CreateSubscriptionInvoiceInternalAsync(
+            company,
+            planType,
+            request.SlotsPurchased,
+            ratePerSlot,
+            startDate,
+            endDate,
+            request.DiscountAmount,
+            request.VatAmount,
+            request.PaidAmount,
+            request.PaymentMode,
+            request.ReferenceNo,
+            request.Remarks,
+            request.IsExtraSlot,
+            request.OperatorId,
+            request.IsExtraSlot ? "ExtraSlot" : "Subscription",
+            cancellationToken);
+
+        await AddActivityAsync(
+            request.IsExtraSlot ? ParkingConstants.GateActionType.ExtraSlotInvoice : "SubscriptionCreated",
+            company.CompanyId,
+            null,
+            null,
+            null,
+            request.IsExtraSlot ? "Extra Slot Subscription" : "Subscription Created",
+            $"{planType} subscription created with {request.SlotsPurchased} slot(s).",
+            request.OperatorId,
+            cancellationToken);
+
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return await GetSubscriptionByIdAsync(subscription.SubscriptionId, cancellationToken);
+    }
+
+    public async Task<SubscriptionListItemDto> UpdateSubscriptionAsync(int subscriptionId, UpdateSubscriptionRequest request, CancellationToken cancellationToken = default)
+    {
+        var subscription = await db.ParkingSubscriptions
+            .Include(x => x.Company)
+            .FirstOrDefaultAsync(x => x.SubscriptionId == subscriptionId, cancellationToken)
+            ?? throw new InvalidOperationException("Subscription not found.");
+
+        if (subscription.Status.Equals(ParkingConstants.SubscriptionStatus.Cancelled, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Cancelled subscription cannot be edited. Create a new subscription or renew instead.");
+
+        var invoice = await GetSubscriptionInvoiceForUpdateAsync(subscription.SubscriptionId, cancellationToken);
+        var settings = await repository.GetSettingsAsync(cancellationToken);
+        var planType = NormalizeExtraSlotPlanType(request.PlanType);
+        var ratePerSlot = GetExtraSlotRate(settings, planType);
+        if (ratePerSlot <= 0)
+            throw new InvalidOperationException($"{planType} subscription rate is not configured. Please update settings first.");
+
+        if (request.SlotsPurchased <= 0)
+            throw new InvalidOperationException("Slots purchased must be greater than zero.");
+
+        var startDate = request.StartDate == default ? subscription.StartDate.Date : request.StartDate.Date;
+        var endDate = request.EndDate.HasValue && request.EndDate.Value.Date > startDate
+            ? request.EndDate.Value.Date
+            : CalculateExtraSlotEndDate(planType, startDate);
+        var subTotal = request.SlotsPurchased * ratePerSlot;
+        var total = subTotal - request.DiscountAmount + request.VatAmount;
+        if (total < 0)
+            throw new InvalidOperationException("Invoice total cannot be negative.");
+
+        var paid = invoice?.PaidAmount ?? subscription.PaidAmount;
+        if (paid > total)
+            throw new InvalidOperationException($"New total AED {total:n2} cannot be less than already paid AED {paid:n2}.");
+
+        subscription.PlanType = planType;
+        subscription.SlotsPurchased = request.SlotsPurchased;
+        subscription.RatePerSlot = ratePerSlot;
+        subscription.StartDate = startDate;
+        subscription.EndDate = endDate;
+        subscription.DiscountAmount = request.DiscountAmount;
+        subscription.VatAmount = request.VatAmount;
+        subscription.TotalAmount = total;
+        subscription.PaidAmount = paid;
+        subscription.BalanceAmount = total - paid;
+        subscription.IsExtraSlot = request.IsExtraSlot;
+        subscription.Status = NormalizeSubscriptionStatus(request.Status, startDate, endDate);
+        subscription.Remarks = TrimOrNull(request.Remarks);
+        subscription.ModifiedBy = request.OperatorId;
+        subscription.ModifiedDate = DateTime.Now;
+
+        if (invoice != null)
+        {
+            invoice.InvoiceType = request.IsExtraSlot ? "ExtraSlot" : "Subscription";
+            invoice.DueDate = endDate;
+            invoice.PlanType = planType;
+            invoice.Slots = request.SlotsPurchased;
+            invoice.SubTotal = subTotal;
+            invoice.DiscountAmount = request.DiscountAmount;
+            invoice.VatAmount = request.VatAmount;
+            invoice.TotalAmount = total;
+            invoice.PaidAmount = paid;
+            invoice.BalanceAmount = total - paid;
+            invoice.Status = GetInvoiceStatus(invoice.BalanceAmount, invoice.PaidAmount);
+            invoice.Remarks = TrimOrNull(request.Remarks);
+        }
+
+        await AddActivityAsync("SubscriptionUpdated", subscription.CompanyId, null, null, null, "Subscription Updated", $"Subscription {subscription.SubscriptionId} updated.", request.OperatorId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return await GetSubscriptionByIdAsync(subscription.SubscriptionId, cancellationToken);
+    }
+
+    public async Task<SubscriptionListItemDto> CancelSubscriptionAsync(int subscriptionId, CancelSubscriptionRequest request, CancellationToken cancellationToken = default)
+    {
+        var subscription = await db.ParkingSubscriptions.FirstOrDefaultAsync(x => x.SubscriptionId == subscriptionId, cancellationToken)
+            ?? throw new InvalidOperationException("Subscription not found.");
+
+        var hasVehiclesInside = await db.ParkingSessions.AnyAsync(x => x.SubscriptionId == subscriptionId && x.Status == ParkingConstants.SessionStatus.Inside, cancellationToken);
+        if (hasVehiclesInside)
+            throw new InvalidOperationException("Cannot cancel subscription while vehicles are still inside using this subscription.");
+
+        subscription.Status = ParkingConstants.SubscriptionStatus.Cancelled;
+        subscription.CancelledBy = request.OperatorId;
+        subscription.CancelledDate = DateTime.Now;
+        subscription.CancellationReason = TrimOrNull(request.Reason);
+        subscription.ModifiedBy = request.OperatorId;
+        subscription.ModifiedDate = DateTime.Now;
+
+        var invoice = await GetSubscriptionInvoiceForUpdateAsync(subscription.SubscriptionId, cancellationToken);
+        if (request.ClearPendingInvoiceBalance && invoice != null && invoice.BalanceAmount > 0)
+        {
+            invoice.BalanceAmount = 0;
+            invoice.Status = "Cancelled";
+            invoice.Remarks = AppendRemarks(invoice.Remarks, "Pending balance cleared due to subscription cancellation.");
+            subscription.BalanceAmount = 0;
+        }
+
+        await AddActivityAsync("SubscriptionCancelled", subscription.CompanyId, null, null, null, "Subscription Cancelled", request.Reason, request.OperatorId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return await GetSubscriptionByIdAsync(subscription.SubscriptionId, cancellationToken);
+    }
+
+    public async Task<SubscriptionListItemDto> RenewSubscriptionAsync(int subscriptionId, RenewSubscriptionRequest request, CancellationToken cancellationToken = default)
+    {
+        var existing = await db.ParkingSubscriptions
+            .Include(x => x.Company)
+            .FirstOrDefaultAsync(x => x.SubscriptionId == subscriptionId, cancellationToken)
+            ?? throw new InvalidOperationException("Subscription not found.");
+
+        var planType = NormalizeExtraSlotPlanType(string.IsNullOrWhiteSpace(request.PlanType) ? existing.PlanType : request.PlanType);
+        var startDate = request.StartDate?.Date ?? (existing.EndDate.Date >= DateTime.Today ? existing.EndDate.Date.AddDays(1) : DateTime.Today);
+        var endDate = request.EndDate.HasValue && request.EndDate.Value.Date > startDate
+            ? request.EndDate.Value.Date
+            : CalculateExtraSlotEndDate(planType, startDate);
+        var slots = request.SlotsPurchased.HasValue && request.SlotsPurchased.Value > 0 ? request.SlotsPurchased.Value : existing.SlotsPurchased;
+
+        var create = new CreateSubscriptionRequest
+        {
+            CompanyId = existing.CompanyId,
+            PlanType = planType,
+            SlotsPurchased = slots,
+            IsExtraSlot = existing.IsExtraSlot,
+            StartDate = startDate,
+            EndDate = endDate,
+            DiscountAmount = request.DiscountAmount,
+            VatAmount = request.VatAmount,
+            PaidAmount = request.PaidAmount,
+            PaymentMode = request.PaymentMode,
+            ReferenceNo = request.ReferenceNo,
+            Remarks = string.IsNullOrWhiteSpace(request.Remarks) ? $"Renewal of subscription #{existing.SubscriptionId}" : request.Remarks,
+            OperatorId = request.OperatorId
+        };
+
+        var renewed = await CreateSubscriptionAsync(create, cancellationToken);
+        await AddActivityAsync("SubscriptionRenewed", existing.CompanyId, null, null, null, "Subscription Renewed", $"Renewed subscription {existing.SubscriptionId} as {renewed.SubscriptionId}.", request.OperatorId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return renewed;
+    }
+
+    private async Task<ParkingSubscription> CreateSubscriptionInvoiceInternalAsync(
+        ParkingCompany company,
+        string planType,
+        int slotsPurchased,
+        decimal ratePerSlot,
+        DateTime startDate,
+        DateTime endDate,
+        decimal discountAmount,
+        decimal vatAmount,
+        decimal paidAmount,
+        string paymentMode,
+        string? referenceNo,
+        string? remarks,
+        bool isExtraSlot,
+        int operatorId,
+        string invoiceType,
+        CancellationToken cancellationToken)
+    {
+        var subTotal = slotsPurchased * ratePerSlot;
+        var total = subTotal - discountAmount + vatAmount;
+        if (total < 0)
+            throw new InvalidOperationException("Invoice total cannot be negative.");
+
+        var paid = Math.Min(Math.Max(paidAmount, 0), total);
+        var balance = total - paid;
+        var invoiceNo = await GenerateNextInvoiceNoAsync(cancellationToken);
+
+        var subscription = new ParkingSubscription
+        {
+            CompanyId = company.CompanyId,
+            PlanType = planType,
+            SlotsPurchased = slotsPurchased,
+            RatePerSlot = ratePerSlot,
+            StartDate = startDate,
+            EndDate = endDate,
+            DiscountAmount = discountAmount,
+            VatAmount = vatAmount,
+            TotalAmount = total,
+            PaidAmount = paid,
+            BalanceAmount = balance,
+            Status = ParkingConstants.SubscriptionStatus.Active,
+            IsExtraSlot = isExtraSlot,
+            Remarks = TrimOrNull(remarks),
+            CreatedBy = operatorId,
+            CreatedDate = DateTime.Now
+        };
+        await db.ParkingSubscriptions.AddAsync(subscription, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+
+        var invoice = new ParkingInvoice
+        {
+            InvoiceNo = invoiceNo,
+            CompanyId = company.CompanyId,
+            SubscriptionId = subscription.SubscriptionId,
+            InvoiceType = invoiceType,
+            InvoiceDate = DateTime.Now,
+            DueDate = endDate,
+            PlanType = planType,
+            Slots = slotsPurchased,
+            SubTotal = subTotal,
+            DiscountAmount = discountAmount,
+            VatAmount = vatAmount,
+            TotalAmount = total,
+            PaidAmount = paid,
+            BalanceAmount = balance,
+            Status = GetInvoiceStatus(balance, paid),
+            Remarks = remarks,
+            CreatedBy = operatorId,
+            CreatedDate = DateTime.Now
+        };
+        await db.ParkingInvoices.AddAsync(invoice, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+
+        subscription.SourceInvoiceId = invoice.InvoiceId;
+
+        if (paid > 0)
+        {
+            var receiptNo = await GenerateNextReceiptNoAsync(cancellationToken);
+            await db.ParkingPayments.AddAsync(new ParkingPayment
+            {
+                ReceiptNo = receiptNo,
+                CompanyId = company.CompanyId,
+                InvoiceId = invoice.InvoiceId,
+                PaymentType = invoiceType,
+                Amount = paid,
+                PaymentMode = string.IsNullOrWhiteSpace(paymentMode) ? "Cash" : paymentMode.Trim(),
+                ReferenceNo = referenceNo,
+                ReceivedBy = operatorId,
+                PaymentDate = DateTime.Now,
+                Remarks = $"Payment collected while creating {invoiceType} subscription."
+            }, cancellationToken);
+        }
+
+        return subscription;
+    }
+
+    private async Task<ParkingInvoice?> GetSubscriptionInvoiceForUpdateAsync(int subscriptionId, CancellationToken cancellationToken)
+    {
+        return await db.ParkingInvoices
+            .Where(x => x.SubscriptionId == subscriptionId)
+            .OrderByDescending(x => x.InvoiceDate)
+            .ThenByDescending(x => x.InvoiceId)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<SubscriptionListItemDto>> BuildSubscriptionListItemsAsync(SubscriptionListQueryRequest request, CancellationToken cancellationToken)
+    {
+        var query = db.ParkingSubscriptions
+            .AsNoTracking()
+            .Include(x => x.Company)
+            .AsQueryable();
+
+        if (request.CompanyId.HasValue && request.CompanyId.Value > 0)
+            query = query.Where(x => x.CompanyId == request.CompanyId.Value);
+
+        var search = (request.SearchText ?? string.Empty).Trim();
+        if (search.Length > 0)
+        {
+            query = query.Where(x => x.Company.CompanyName.Contains(search) ||
+                                     x.Company.CompanyCode.Contains(search) ||
+                                     x.PlanType.Contains(search));
+        }
+
+        var planType = (request.PlanType ?? string.Empty).Trim();
+        if (planType.Length > 0 && !planType.Equals("All", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.PlanType == planType);
+
+        if (request.IsExtraSlot.HasValue)
+            query = query.Where(x => x.IsExtraSlot == request.IsExtraSlot.Value);
+
+        if (request.StartFrom.HasValue)
+            query = query.Where(x => x.StartDate >= request.StartFrom.Value.Date);
+        if (request.StartTo.HasValue)
+            query = query.Where(x => x.StartDate <= request.StartTo.Value.Date);
+        if (request.EndFrom.HasValue)
+            query = query.Where(x => x.EndDate >= request.EndFrom.Value.Date);
+        if (request.EndTo.HasValue)
+            query = query.Where(x => x.EndDate <= request.EndTo.Value.Date);
+
+        var subscriptions = await query.ToListAsync(cancellationToken);
+        if (subscriptions.Count == 0)
+            return [];
+
+        var subscriptionIds = subscriptions.Select(x => x.SubscriptionId).ToList();
+        var companyIds = subscriptions.Select(x => x.CompanyId).Distinct().ToList();
+
+        var invoices = await db.ParkingInvoices
+            .AsNoTracking()
+            .Where(x => x.SubscriptionId.HasValue && subscriptionIds.Contains(x.SubscriptionId.Value))
+            .ToListAsync(cancellationToken);
+
+        var invoiceBySubscription = invoices
+            .GroupBy(x => x.SubscriptionId!.Value)
+            .ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.InvoiceDate).ThenByDescending(y => y.InvoiceId).First());
+
+        var insideByCompany = await db.ParkingSessions
+            .AsNoTracking()
+            .Where(x => companyIds.Contains(x.CompanyId) && x.Status == ParkingConstants.SessionStatus.Inside)
+            .GroupBy(x => x.CompanyId)
+            .Select(x => new { CompanyId = x.Key, Count = x.Count() })
+            .ToDictionaryAsync(x => x.CompanyId, x => x.Count, cancellationToken);
+
+        var today = DateTime.Today;
+        var items = new List<SubscriptionListItemDto>();
+        foreach (var subscription in subscriptions)
+        {
+            invoiceBySubscription.TryGetValue(subscription.SubscriptionId, out var invoice);
+            insideByCompany.TryGetValue(subscription.CompanyId, out var insideCount);
+            var displayStatus = GetRuntimeSubscriptionStatus(subscription, today);
+            var paymentStatus = invoice == null ? GetInvoiceStatus(subscription.BalanceAmount, subscription.PaidAmount) : invoice.Status;
+            var durationDays = Math.Max(1, (subscription.EndDate.Date - subscription.StartDate.Date).Days);
+
+            items.Add(new SubscriptionListItemDto(
+                subscription.SubscriptionId,
+                subscription.CompanyId,
+                subscription.Company.CompanyCode,
+                subscription.Company.CompanyName,
+                subscription.PlanType,
+                subscription.SlotsPurchased,
+                subscription.RatePerSlot,
+                subscription.StartDate,
+                subscription.EndDate,
+                durationDays,
+                subscription.DiscountAmount,
+                subscription.VatAmount,
+                invoice?.TotalAmount ?? subscription.TotalAmount,
+                invoice?.PaidAmount ?? subscription.PaidAmount,
+                invoice?.BalanceAmount ?? subscription.BalanceAmount,
+                paymentStatus,
+                displayStatus,
+                subscription.IsExtraSlot,
+                invoice?.InvoiceId,
+                invoice?.InvoiceNo,
+                invoice?.Status,
+                insideCount,
+                subscription.CreatedDate,
+                subscription.Remarks,
+                subscription.CancellationReason));
+        }
+
+        return ApplySubscriptionListPostFilters(items, request).ToList();
+    }
+
+    private static IEnumerable<SubscriptionListItemDto> ApplySubscriptionListPostFilters(IEnumerable<SubscriptionListItemDto> items, SubscriptionListQueryRequest request)
+    {
+        var status = (request.Status ?? string.Empty).Trim();
+        if (status.Length > 0 && !status.Equals("All", StringComparison.OrdinalIgnoreCase))
+            items = items.Where(x => x.Status.Equals(status, StringComparison.OrdinalIgnoreCase));
+
+        var paymentStatus = (request.PaymentStatus ?? string.Empty).Trim();
+        if (paymentStatus.Length > 0 && !paymentStatus.Equals("All", StringComparison.OrdinalIgnoreCase))
+            items = items.Where(x => x.PaymentStatus.Equals(paymentStatus, StringComparison.OrdinalIgnoreCase));
+
+        var tab = (request.Tab ?? "All").Trim();
+        var today = DateTime.Today;
+        if (tab.Equals("Active", StringComparison.OrdinalIgnoreCase))
+            items = items.Where(x => x.Status.Equals(ParkingConstants.SubscriptionStatus.Active, StringComparison.OrdinalIgnoreCase));
+        else if (tab.Equals("Pending", StringComparison.OrdinalIgnoreCase))
+            items = items.Where(x => x.BalanceAmount > 0);
+        else if (tab.Equals("Expired", StringComparison.OrdinalIgnoreCase))
+            items = items.Where(x => x.Status.Equals(ParkingConstants.SubscriptionStatus.Expired, StringComparison.OrdinalIgnoreCase));
+        else if (tab.Equals("ExpiringSoon", StringComparison.OrdinalIgnoreCase))
+            items = items.Where(x => x.Status.Equals(ParkingConstants.SubscriptionStatus.Active, StringComparison.OrdinalIgnoreCase) && x.EndDate.Date >= today && x.EndDate.Date <= today.AddDays(7));
+        else if (tab.Equals("ExtraSlots", StringComparison.OrdinalIgnoreCase))
+            items = items.Where(x => x.IsExtraSlot);
+        else if (tab.Equals("Cancelled", StringComparison.OrdinalIgnoreCase))
+            items = items.Where(x => x.Status.Equals(ParkingConstants.SubscriptionStatus.Cancelled, StringComparison.OrdinalIgnoreCase));
+
+        return items;
+    }
+
+    private static IEnumerable<SubscriptionListItemDto> SortSubscriptions(IEnumerable<SubscriptionListItemDto> items, string? sortBy, string? sortDirection)
+    {
+        var desc = (sortDirection ?? string.Empty).Equals("Desc", StringComparison.OrdinalIgnoreCase);
+        sortBy = (sortBy ?? string.Empty).Trim().ToLowerInvariant();
+
+        return sortBy switch
+        {
+            "companyname" => desc ? items.OrderByDescending(x => x.CompanyName) : items.OrderBy(x => x.CompanyName),
+            "plantype" => desc ? items.OrderByDescending(x => x.PlanType) : items.OrderBy(x => x.PlanType),
+            "slotspurchased" => desc ? items.OrderByDescending(x => x.SlotsPurchased) : items.OrderBy(x => x.SlotsPurchased),
+            "totalamount" => desc ? items.OrderByDescending(x => x.TotalAmount) : items.OrderBy(x => x.TotalAmount),
+            "balanceamount" => desc ? items.OrderByDescending(x => x.BalanceAmount) : items.OrderBy(x => x.BalanceAmount),
+            "startdate" => desc ? items.OrderByDescending(x => x.StartDate) : items.OrderBy(x => x.StartDate),
+            "createddate" => desc ? items.OrderByDescending(x => x.CreatedDate) : items.OrderBy(x => x.CreatedDate),
+            _ => desc ? items.OrderByDescending(x => x.EndDate) : items.OrderBy(x => x.EndDate),
+        };
+    }
+
+    private static string GetRuntimeSubscriptionStatus(ParkingSubscription subscription, DateTime today)
+    {
+        if (subscription.Status.Equals(ParkingConstants.SubscriptionStatus.Cancelled, StringComparison.OrdinalIgnoreCase))
+            return ParkingConstants.SubscriptionStatus.Cancelled;
+        if (subscription.EndDate.Date < today)
+            return ParkingConstants.SubscriptionStatus.Expired;
+        return subscription.Status;
+    }
+
+    private static string NormalizeSubscriptionStatus(string? status, DateTime startDate, DateTime endDate)
+    {
+        var value = (status ?? string.Empty).Trim();
+        if (value.Equals(ParkingConstants.SubscriptionStatus.Cancelled, StringComparison.OrdinalIgnoreCase))
+            return ParkingConstants.SubscriptionStatus.Cancelled;
+        if (endDate.Date < DateTime.Today)
+            return ParkingConstants.SubscriptionStatus.Expired;
+        return ParkingConstants.SubscriptionStatus.Active;
+    }
+
     public async Task<CompanyGateStatusDto> CheckCompanyAsync(CheckCompanyRequest request, CancellationToken cancellationToken = default)
     {
         var search = request.SearchText.Trim();

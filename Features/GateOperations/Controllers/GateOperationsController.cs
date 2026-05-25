@@ -115,6 +115,167 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
         }
     }
 
+
+
+    [HttpGet("subscriptions/rates")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<ExtraSlotRateDto>>>> GetSubscriptionRates(CancellationToken cancellationToken)
+    {
+        var data = await service.GetExtraSlotRatesAsync(cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<ExtraSlotRateDto>>.Ok(data));
+    }
+
+    [HttpGet("subscriptions")]
+    public async Task<ActionResult<ApiResponse<PagedSubscriptionResultDto>>> GetSubscriptions(
+        [FromQuery] string? searchText,
+        [FromQuery] string? tab,
+        [FromQuery] int? companyId,
+        [FromQuery] string? planType,
+        [FromQuery] string? status,
+        [FromQuery] string? paymentStatus,
+        [FromQuery] bool? isExtraSlot,
+        [FromQuery] DateTime? startFrom,
+        [FromQuery] DateTime? startTo,
+        [FromQuery] DateTime? endFrom,
+        [FromQuery] DateTime? endTo,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 25,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new SubscriptionListQueryRequest
+        {
+            SearchText = searchText,
+            Tab = tab,
+            CompanyId = companyId,
+            PlanType = planType,
+            Status = status,
+            PaymentStatus = paymentStatus,
+            IsExtraSlot = isExtraSlot,
+            StartFrom = startFrom,
+            StartTo = startTo,
+            EndFrom = endFrom,
+            EndTo = endTo,
+            SortBy = sortBy,
+            SortDirection = sortDirection,
+            Page = page,
+            PageSize = pageSize
+        };
+
+        var data = await service.GetSubscriptionsAsync(request, cancellationToken);
+        return Ok(ApiResponse<PagedSubscriptionResultDto>.Ok(data));
+    }
+
+    [HttpGet("subscriptions/export")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<SubscriptionListItemDto>>>> ExportSubscriptions(
+        [FromQuery] string? searchText,
+        [FromQuery] string? tab,
+        [FromQuery] int? companyId,
+        [FromQuery] string? planType,
+        [FromQuery] string? status,
+        [FromQuery] string? paymentStatus,
+        [FromQuery] bool? isExtraSlot,
+        [FromQuery] DateTime? startFrom,
+        [FromQuery] DateTime? startTo,
+        [FromQuery] DateTime? endFrom,
+        [FromQuery] DateTime? endTo,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new SubscriptionListQueryRequest
+        {
+            SearchText = searchText,
+            Tab = tab,
+            CompanyId = companyId,
+            PlanType = planType,
+            Status = status,
+            PaymentStatus = paymentStatus,
+            IsExtraSlot = isExtraSlot,
+            StartFrom = startFrom,
+            StartTo = startTo,
+            EndFrom = endFrom,
+            EndTo = endTo,
+            SortBy = sortBy,
+            SortDirection = sortDirection,
+            Page = 1,
+            PageSize = 5000
+        };
+
+        var data = await service.ExportSubscriptionsAsync(request, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<SubscriptionListItemDto>>.Ok(data));
+    }
+
+    [HttpGet("subscriptions/{subscriptionId:int}")]
+    public async Task<ActionResult<ApiResponse<SubscriptionListItemDto>>> GetSubscription(int subscriptionId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.GetSubscriptionByIdAsync(subscriptionId, cancellationToken);
+            return Ok(ApiResponse<SubscriptionListItemDto>.Ok(data));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return NotFound(ApiResponse<SubscriptionListItemDto>.Fail(ex.Message));
+        }
+    }
+
+    [HttpPost("subscriptions")]
+    public async Task<ActionResult<ApiResponse<SubscriptionListItemDto>>> CreateSubscription([FromBody] CreateSubscriptionRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.CreateSubscriptionAsync(request, cancellationToken);
+            return Ok(ApiResponse<SubscriptionListItemDto>.Ok(data, "Subscription invoice created."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ApiResponse<SubscriptionListItemDto>.Fail(ex.Message));
+        }
+    }
+
+    [HttpPut("subscriptions/{subscriptionId:int}")]
+    public async Task<ActionResult<ApiResponse<SubscriptionListItemDto>>> UpdateSubscription(int subscriptionId, [FromBody] UpdateSubscriptionRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.UpdateSubscriptionAsync(subscriptionId, request, cancellationToken);
+            return Ok(ApiResponse<SubscriptionListItemDto>.Ok(data, "Subscription updated."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ApiResponse<SubscriptionListItemDto>.Fail(ex.Message));
+        }
+    }
+
+    [HttpPost("subscriptions/{subscriptionId:int}/cancel")]
+    public async Task<ActionResult<ApiResponse<SubscriptionListItemDto>>> CancelSubscription(int subscriptionId, [FromBody] CancelSubscriptionRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.CancelSubscriptionAsync(subscriptionId, request, cancellationToken);
+            return Ok(ApiResponse<SubscriptionListItemDto>.Ok(data, "Subscription cancelled."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ApiResponse<SubscriptionListItemDto>.Fail(ex.Message));
+        }
+    }
+
+    [HttpPost("subscriptions/{subscriptionId:int}/renew")]
+    public async Task<ActionResult<ApiResponse<SubscriptionListItemDto>>> RenewSubscription(int subscriptionId, [FromBody] RenewSubscriptionRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.RenewSubscriptionAsync(subscriptionId, request, cancellationToken);
+            return Ok(ApiResponse<SubscriptionListItemDto>.Ok(data, "Subscription renewed."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ApiResponse<SubscriptionListItemDto>.Fail(ex.Message));
+        }
+    }
+
     [HttpPost("entry/check-company")]
     public async Task<ActionResult<ApiResponse<CompanyGateStatusDto>>> CheckCompany([FromBody] CheckCompanyRequest request, CancellationToken cancellationToken)
     {

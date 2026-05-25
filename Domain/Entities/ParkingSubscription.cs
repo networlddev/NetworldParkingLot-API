@@ -17,8 +17,14 @@ public sealed class ParkingSubscription
     public string Status { get; set; } = "Active";
     public bool IsExtraSlot { get; set; }
     public int? SourceInvoiceId { get; set; }
+    public string? Remarks { get; set; }
     public DateTime CreatedDate { get; set; } = DateTime.Now;
     public int? CreatedBy { get; set; }
+    public DateTime? ModifiedDate { get; set; }
+    public int? ModifiedBy { get; set; }
+    public DateTime? CancelledDate { get; set; }
+    public int? CancelledBy { get; set; }
+    public string? CancellationReason { get; set; }
 
     public ParkingCompany Company { get; set; } = default!;
 }
