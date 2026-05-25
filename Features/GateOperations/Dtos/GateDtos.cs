@@ -113,6 +113,31 @@ public sealed record ExtraSlotInvoiceResultDto(
     string Status,
     string Message);
 
+public sealed record ExtraSlotRateDto(
+    string PlanType,
+    decimal RatePerSlot,
+    int DurationDays,
+    string DisplayName);
+
+public sealed record CompanyInvoiceDto(
+    int InvoiceId,
+    string InvoiceNo,
+    int CompanyId,
+    string CompanyName,
+    string InvoiceType,
+    DateTime InvoiceDate,
+    DateTime? DueDate,
+    string? PlanType,
+    int Slots,
+    decimal SubTotal,
+    decimal DiscountAmount,
+    decimal VatAmount,
+    decimal TotalAmount,
+    decimal PaidAmount,
+    decimal BalanceAmount,
+    string Status,
+    string? Remarks);
+
 public sealed record RecentActivityDto(
     DateTime Time,
     string Type,

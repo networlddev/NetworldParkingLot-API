@@ -246,6 +246,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             await EnsureOverstayInvoiceIfNeededAsync(request.SessionId.Value, request.OperatorId, cancellationToken);
 
         decimal currentPending;
+        string? paidInvoiceNo = null;
+        decimal? invoiceBalanceAfterPayment = null;
 
         if (request.InvoiceId.HasValue)
         {
@@ -262,6 +264,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                 throw new InvalidOperationException($"Payment amount cannot be more than current invoice balance AED {currentPending:n2}.");
 
             ApplyAmountToInvoice(invoice, request.Amount);
+            paidInvoiceNo = invoice.InvoiceNo;
+            invoiceBalanceAfterPayment = invoice.BalanceAmount;
         }
         else
         {
@@ -299,7 +303,11 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         await transaction.CommitAsync(cancellationToken);
 
         var pending = await repository.GetPendingAmountAsync(company.CompanyId, cancellationToken);
-        var finalMessage = "Payment saved successfully.";
+        var finalMessage = invoiceBalanceAfterPayment.HasValue
+            ? invoiceBalanceAfterPayment.Value <= 0
+                ? $"Invoice {paidInvoiceNo} fully collected."
+                : $"Partial payment saved for invoice {paidInvoiceNo}. Remaining invoice balance AED {invoiceBalanceAfterPayment.Value:n2}."
+            : "Payment saved successfully.";
 
         if (request.SavePaymentAndAllowExit && request.SessionId.HasValue)
         {
@@ -360,30 +368,45 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
     }
 
 
+    public async Task<IReadOnlyList<ExtraSlotRateDto>> GetExtraSlotRatesAsync(CancellationToken cancellationToken = default)
+    {
+        var settings = await repository.GetSettingsAsync(cancellationToken);
+        return BuildExtraSlotRatePlans(settings);
+    }
+
     public async Task<ExtraSlotInvoiceResultDto> CreateExtraSlotInvoiceAsync(CreateExtraSlotInvoiceRequest request, CancellationToken cancellationToken = default)
     {
         var company = await repository.GetCompanyAsync(request.CompanyId, cancellationToken)
             ?? throw new InvalidOperationException("Company not found.");
 
-        if (request.EndDate.Date < request.StartDate.Date)
-            throw new InvalidOperationException("End date cannot be before start date.");
+        var settings = await repository.GetSettingsAsync(cancellationToken);
+        var planType = NormalizeExtraSlotPlanType(request.PlanType);
+        var ratePerSlot = GetExtraSlotRate(settings, planType);
+        if (ratePerSlot <= 0)
+            throw new InvalidOperationException($"{planType} extra slot rate is not configured. Please update rate settings first.");
+
+        var startDate = request.StartDate == default ? DateTime.Today : request.StartDate.Date;
+        var endDate = CalculateExtraSlotEndDate(planType, startDate);
 
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
 
-        var subTotal = request.AdditionalSlots * request.RatePerSlot;
+        var subTotal = request.AdditionalSlots * ratePerSlot;
         var total = subTotal - request.DiscountAmount + request.VatAmount;
-        var paid = Math.Min(request.PaidAmount, total);
+        if (total < 0)
+            throw new InvalidOperationException("Invoice total cannot be negative.");
+
+        var paid = Math.Min(Math.Max(request.PaidAmount, 0), total);
         var balance = total - paid;
         var invoiceNo = await GenerateNextInvoiceNoAsync(cancellationToken);
 
         var subscription = new ParkingSubscription
         {
             CompanyId = company.CompanyId,
-            PlanType = request.PlanType,
+            PlanType = planType,
             SlotsPurchased = request.AdditionalSlots,
-            RatePerSlot = request.RatePerSlot,
-            StartDate = request.StartDate.Date,
-            EndDate = request.EndDate.Date,
+            RatePerSlot = ratePerSlot,
+            StartDate = startDate,
+            EndDate = endDate,
             DiscountAmount = request.DiscountAmount,
             VatAmount = request.VatAmount,
             TotalAmount = total,
@@ -404,8 +427,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             SubscriptionId = subscription.SubscriptionId,
             InvoiceType = "ExtraSlot",
             InvoiceDate = DateTime.Now,
-            DueDate = request.EndDate.Date,
-            PlanType = request.PlanType,
+            DueDate = endDate,
+            PlanType = planType,
             Slots = request.AdditionalSlots,
             SubTotal = subTotal,
             DiscountAmount = request.DiscountAmount,
@@ -441,11 +464,46 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             }, cancellationToken);
         }
 
-        await AddActivityAsync(ParkingConstants.GateActionType.ExtraSlotInvoice, company.CompanyId, null, null, null, "Extra Slot Invoice", $"Added {request.AdditionalSlots} extra slots.", request.OperatorId, cancellationToken);
+        await AddActivityAsync(ParkingConstants.GateActionType.ExtraSlotInvoice, company.CompanyId, null, null, null, "Extra Slot Invoice", $"Added {request.AdditionalSlots} {planType} extra slots.", request.OperatorId, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
-        return new ExtraSlotInvoiceResultDto(subscription.SubscriptionId, invoice.InvoiceId, invoice.InvoiceNo, company.CompanyId, request.AdditionalSlots, request.PlanType, total, balance, invoice.Status, "Extra slots added and invoice generated.");
+        return new ExtraSlotInvoiceResultDto(subscription.SubscriptionId, invoice.InvoiceId, invoice.InvoiceNo, company.CompanyId, request.AdditionalSlots, planType, total, balance, invoice.Status, "Extra slots added and invoice generated.");
+    }
+
+    public async Task<IReadOnlyList<CompanyInvoiceDto>> GetCompanyInvoicesAsync(int companyId, CancellationToken cancellationToken = default)
+    {
+        var exists = await db.ParkingCompanies.AnyAsync(x => x.CompanyId == companyId, cancellationToken);
+        if (!exists)
+            throw new InvalidOperationException("Company not found.");
+
+        var invoices = await db.ParkingInvoices
+            .AsNoTracking()
+            .Include(x => x.Company)
+            .Where(x => x.CompanyId == companyId)
+            .OrderByDescending(x => x.InvoiceDate)
+            .ThenByDescending(x => x.InvoiceId)
+            .Take(500)
+            .ToListAsync(cancellationToken);
+
+        return invoices.Select(x => new CompanyInvoiceDto(
+            x.InvoiceId,
+            x.InvoiceNo,
+            x.CompanyId,
+            x.Company.CompanyName,
+            x.InvoiceType,
+            x.InvoiceDate,
+            x.DueDate,
+            x.PlanType,
+            x.Slots,
+            x.SubTotal,
+            x.DiscountAmount,
+            x.VatAmount,
+            x.TotalAmount,
+            x.PaidAmount,
+            x.BalanceAmount,
+            x.Status,
+            x.Remarks)).ToList();
     }
 
     public async Task<IReadOnlyList<RecentActivityDto>> GetRecentActivityAsync(int take = 25, CancellationToken cancellationToken = default)
@@ -656,14 +714,36 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             overstayDays = (now.Date - session.Subscription.EndDate.Date).Days;
 
         var overstayAmount = overstayDays * overstayDailyCharge;
-        var pending = await repository.GetPendingAmountAsync(session.CompanyId, cancellationToken);
-        var totalPayable = pending + overstayAmount;
-        var paymentStatus = totalPayable <= 0 ? ParkingConstants.PaymentStatus.Paid : ParkingConstants.PaymentStatus.Unpaid;
-        var finalStatus = totalPayable <= 0 ? ParkingConstants.ExitStatus.ClearToExit : ParkingConstants.ExitStatus.PaymentRequired;
-        var message = totalPayable <= 0 ? "Clear to exit. No pending amount." : $"Payment required AED {totalPayable:n2}.";
 
         session.OverstayDays = overstayDays;
         session.OverstayAmount = overstayAmount;
+
+        if (saveDisplayEvent && overstayAmount > 0)
+        {
+            await EnsureOverstayInvoiceIfNeededAsync(session.SessionId, operatorId, cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
+        }
+
+        var overstayInvoice = overstayAmount > 0
+            ? await db.ParkingInvoices
+                .AsNoTracking()
+                .FirstOrDefaultAsync(x => x.SessionId == session.SessionId && x.InvoiceType == "Overstay", cancellationToken)
+            : null;
+
+        var pending = await repository.GetPendingAmountAsync(session.CompanyId, cancellationToken);
+        var unpaidOverstayBalance = overstayInvoice?.BalanceAmount ?? 0m;
+        var totalPayable = pending + (overstayAmount > 0 && overstayInvoice == null ? overstayAmount : 0);
+
+        // A paid overstay invoice may still have historical overstay days on the session.
+        // Exit status must be decided from payable balance, not from the overstay day count.
+        if (overstayInvoice != null && unpaidOverstayBalance <= 0 && pending <= 0)
+            totalPayable = 0;
+
+        var paymentStatus = totalPayable <= 0 ? ParkingConstants.PaymentStatus.Paid : ParkingConstants.PaymentStatus.Unpaid;
+        var finalStatus = totalPayable <= 0 ? ParkingConstants.ExitStatus.ClearToExit : ParkingConstants.ExitStatus.PaymentRequired;
+        var message = totalPayable <= 0
+            ? "Clear to exit. No pending amount."
+            : $"Payment required AED {totalPayable:n2}. Open Collect Payment and collect the invoice before exit.";
 
         await AddActivityAsync(ParkingConstants.GateActionType.ExitScanned, session.CompanyId, session.SessionId, session.BarcodeNo, session.PlateNo, finalStatus, message, operatorId, cancellationToken);
 
@@ -688,8 +768,24 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (session == null || session.OverstayAmount <= 0)
             return;
 
-        var exists = await db.ParkingInvoices.AnyAsync(x => x.SessionId == sessionId && x.InvoiceType == "Overstay", cancellationToken);
-        if (exists) return;
+        var existing = await db.ParkingInvoices
+            .FirstOrDefaultAsync(x => x.SessionId == sessionId && x.InvoiceType == "Overstay", cancellationToken);
+
+        if (existing != null)
+        {
+            // If the vehicle is scanned again before payment and the overstay days changed,
+            // keep the unpaid overstay invoice synchronized with the latest calculated amount.
+            if (existing.PaidAmount <= 0 && existing.BalanceAmount > 0 && existing.TotalAmount != session.OverstayAmount)
+            {
+                existing.SubTotal = session.OverstayAmount;
+                existing.TotalAmount = session.OverstayAmount;
+                existing.BalanceAmount = session.OverstayAmount;
+                existing.Status = ParkingConstants.PaymentStatus.Unpaid;
+                existing.Remarks = $"Overstay charge for barcode {session.BarcodeNo} - {session.OverstayDays} day(s)";
+            }
+
+            return;
+        }
 
         var invoiceNo = await GenerateNextInvoiceNoAsync(cancellationToken);
         await db.ParkingInvoices.AddAsync(new ParkingInvoice
@@ -705,7 +801,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             TotalAmount = session.OverstayAmount,
             BalanceAmount = session.OverstayAmount,
             Status = ParkingConstants.PaymentStatus.Unpaid,
-            Remarks = $"Overstay charge for barcode {session.BarcodeNo}",
+            Remarks = $"Overstay charge for barcode {session.BarcodeNo} - {session.OverstayDays} day(s)",
             CreatedBy = operatorId,
             CreatedDate = DateTime.Now
         }, cancellationToken);
@@ -830,6 +926,37 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
     private static string AppendRemarks(string? current, string addition) =>
         string.IsNullOrWhiteSpace(current) ? addition : current + Environment.NewLine + addition;
+
+    private static IReadOnlyList<ExtraSlotRateDto> BuildExtraSlotRatePlans(Dictionary<string, string> settings) =>
+    [
+        new ExtraSlotRateDto("Daily", GetExtraSlotRate(settings, "Daily"), 1, $"Daily - AED {GetExtraSlotRate(settings, "Daily"):n2} per slot"),
+        new ExtraSlotRateDto("Weekly", GetExtraSlotRate(settings, "Weekly"), 7, $"Weekly - AED {GetExtraSlotRate(settings, "Weekly"):n2} per slot"),
+        new ExtraSlotRateDto("Monthly", GetExtraSlotRate(settings, "Monthly"), 30, $"Monthly - AED {GetExtraSlotRate(settings, "Monthly"):n2} per slot")
+    ];
+
+    private static string NormalizeExtraSlotPlanType(string? planType)
+    {
+        var value = (planType ?? string.Empty).Trim();
+        if (value.Equals("Weekly", StringComparison.OrdinalIgnoreCase)) return "Weekly";
+        if (value.Equals("Monthly", StringComparison.OrdinalIgnoreCase)) return "Monthly";
+        return "Daily";
+    }
+
+    private static decimal GetExtraSlotRate(Dictionary<string, string> settings, string planType) =>
+        NormalizeExtraSlotPlanType(planType) switch
+        {
+            "Weekly" => GetDecimalSetting(settings, "WeeklyRatePerSlot", 150m),
+            "Monthly" => GetDecimalSetting(settings, "MonthlyRatePerSlot", 500m),
+            _ => GetDecimalSetting(settings, "DailyRatePerSlot", 50m)
+        };
+
+    private static DateTime CalculateExtraSlotEndDate(string planType, DateTime startDate) =>
+        NormalizeExtraSlotPlanType(planType) switch
+        {
+            "Weekly" => startDate.AddDays(7),
+            "Monthly" => startDate.AddMonths(1),
+            _ => startDate.AddDays(1)
+        };
 
     private static string GetInvoiceStatus(decimal balance, decimal paid) =>
         balance <= 0 ? ParkingConstants.PaymentStatus.Paid : paid > 0 ? ParkingConstants.PaymentStatus.Partial : ParkingConstants.PaymentStatus.Unpaid;

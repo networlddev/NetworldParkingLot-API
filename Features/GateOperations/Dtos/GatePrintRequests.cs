@@ -32,6 +32,14 @@ public sealed record PrintJobResultDto(
     string DocumentName,
     string Message);
 
+public sealed class InvoiceCommandPrintDto
+{
+    public int InvoiceId { get; set; }
+    public string InvoiceNo { get; set; } = string.Empty;
+    public string PrinterName { get; set; } = string.Empty;
+    public string Command { get; set; } = string.Empty;
+}
+
 public sealed class BarcodeImagePrintDto
 {
     public string BarcodeNo { get; set; } = string.Empty;

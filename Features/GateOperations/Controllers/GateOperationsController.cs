@@ -114,6 +114,13 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
         }
     }
 
+    [HttpGet("extra-slots/rates")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<ExtraSlotRateDto>>>> GetExtraSlotRates(CancellationToken cancellationToken)
+    {
+        var data = await service.GetExtraSlotRatesAsync(cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<ExtraSlotRateDto>>.Ok(data));
+    }
+
     [HttpPost("extra-slots/invoice")]
     public async Task<ActionResult<ApiResponse<ExtraSlotInvoiceResultDto>>> CreateExtraSlotInvoice([FromBody] CreateExtraSlotInvoiceRequest request, CancellationToken cancellationToken)
     {
@@ -125,6 +132,23 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
         catch (InvalidOperationException ex)
         {
             return BadRequest(ApiResponse<ExtraSlotInvoiceResultDto>.Fail(ex.Message));
+        }
+    }
+
+    [HttpGet("invoices/company/{companyId:int}")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<CompanyInvoiceDto>>>> GetCompanyInvoices(int companyId, CancellationToken cancellationToken)
+    {
+        if (companyId <= 0)
+            return BadRequest(ApiResponse<IReadOnlyList<CompanyInvoiceDto>>.Fail("Company id is required."));
+
+        try
+        {
+            var data = await service.GetCompanyInvoicesAsync(companyId, cancellationToken);
+            return Ok(ApiResponse<IReadOnlyList<CompanyInvoiceDto>>.Ok(data));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ApiResponse<IReadOnlyList<CompanyInvoiceDto>>.Fail(ex.Message));
         }
     }
 
@@ -150,11 +174,16 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     }
 
     [HttpGet("outside-display/recent-scans")]
+
     public async Task<ActionResult<ApiResponse<IReadOnlyList<OutsideDisplayDto>>>> GetRecentOutsideDisplayScans(
     [FromQuery] int take = 30,
     CancellationToken cancellationToken = default)
+
     {
+
         var data = await service.GetRecentOutsideDisplayScansAsync(take, cancellationToken);
+
         return Ok(ApiResponse<IReadOnlyList<OutsideDisplayDto>>.Ok(data));
+
     }
 }
