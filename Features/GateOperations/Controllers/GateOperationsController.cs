@@ -388,6 +388,152 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
         }
     }
 
+
+
+    [HttpGet("invoices")]
+    public async Task<ActionResult<ApiResponse<PagedInvoiceResultDto>>> GetInvoices(
+        [FromQuery] string? searchText,
+        [FromQuery] string? tab,
+        [FromQuery] int? companyId,
+        [FromQuery] string? invoiceType,
+        [FromQuery] string? status,
+        [FromQuery] DateTime? invoiceFrom,
+        [FromQuery] DateTime? invoiceTo,
+        [FromQuery] DateTime? dueFrom,
+        [FromQuery] DateTime? dueTo,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 25,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new InvoiceListQueryRequest
+        {
+            SearchText = searchText,
+            Tab = tab,
+            CompanyId = companyId,
+            InvoiceType = invoiceType,
+            Status = status,
+            InvoiceFrom = invoiceFrom,
+            InvoiceTo = invoiceTo,
+            DueFrom = dueFrom,
+            DueTo = dueTo,
+            SortBy = sortBy,
+            SortDirection = sortDirection,
+            Page = page,
+            PageSize = pageSize
+        };
+
+        var data = await service.GetInvoicesAsync(request, cancellationToken);
+        return Ok(ApiResponse<PagedInvoiceResultDto>.Ok(data));
+    }
+
+    [HttpGet("invoices/export")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<InvoiceListItemDto>>>> ExportInvoices(
+        [FromQuery] string? searchText,
+        [FromQuery] string? tab,
+        [FromQuery] int? companyId,
+        [FromQuery] string? invoiceType,
+        [FromQuery] string? status,
+        [FromQuery] DateTime? invoiceFrom,
+        [FromQuery] DateTime? invoiceTo,
+        [FromQuery] DateTime? dueFrom,
+        [FromQuery] DateTime? dueTo,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new InvoiceListQueryRequest
+        {
+            SearchText = searchText,
+            Tab = tab,
+            CompanyId = companyId,
+            InvoiceType = invoiceType,
+            Status = status,
+            InvoiceFrom = invoiceFrom,
+            InvoiceTo = invoiceTo,
+            DueFrom = dueFrom,
+            DueTo = dueTo,
+            SortBy = sortBy,
+            SortDirection = sortDirection,
+            Page = 1,
+            PageSize = 5000
+        };
+
+        var data = await service.ExportInvoicesAsync(request, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<InvoiceListItemDto>>.Ok(data));
+    }
+
+    [HttpGet("invoices/{invoiceId:int}")]
+    public async Task<ActionResult<ApiResponse<InvoiceListItemDto>>> GetInvoice(int invoiceId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.GetInvoiceByIdAsync(invoiceId, cancellationToken);
+            return Ok(ApiResponse<InvoiceListItemDto>.Ok(data));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return NotFound(ApiResponse<InvoiceListItemDto>.Fail(ex.Message));
+        }
+    }
+
+    [HttpGet("invoices/{invoiceId:int}/payments")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<InvoicePaymentDto>>>> GetInvoicePayments(int invoiceId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.GetInvoicePaymentsAsync(invoiceId, cancellationToken);
+            return Ok(ApiResponse<IReadOnlyList<InvoicePaymentDto>>.Ok(data));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return NotFound(ApiResponse<IReadOnlyList<InvoicePaymentDto>>.Fail(ex.Message));
+        }
+    }
+
+    [HttpPost("invoices")]
+    public async Task<ActionResult<ApiResponse<InvoiceListItemDto>>> CreateInvoice([FromBody] CreateInvoiceRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.CreateInvoiceAsync(request, cancellationToken);
+            return Ok(ApiResponse<InvoiceListItemDto>.Ok(data, "Invoice created."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ApiResponse<InvoiceListItemDto>.Fail(ex.Message));
+        }
+    }
+
+    [HttpPut("invoices/{invoiceId:int}")]
+    public async Task<ActionResult<ApiResponse<InvoiceListItemDto>>> UpdateInvoice(int invoiceId, [FromBody] UpdateInvoiceRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.UpdateInvoiceAsync(invoiceId, request, cancellationToken);
+            return Ok(ApiResponse<InvoiceListItemDto>.Ok(data, "Invoice updated."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ApiResponse<InvoiceListItemDto>.Fail(ex.Message));
+        }
+    }
+
+    [HttpPost("invoices/{invoiceId:int}/cancel")]
+    public async Task<ActionResult<ApiResponse<InvoiceListItemDto>>> CancelInvoice(int invoiceId, [FromBody] CancelInvoiceRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.CancelInvoiceAsync(invoiceId, request, cancellationToken);
+            return Ok(ApiResponse<InvoiceListItemDto>.Ok(data, "Invoice cancelled."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ApiResponse<InvoiceListItemDto>.Fail(ex.Message));
+        }
+    }
+
     [HttpGet("invoices/company/{companyId:int}")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<CompanyInvoiceDto>>>> GetCompanyInvoices(int companyId, CancellationToken cancellationToken)
     {

@@ -26,6 +26,13 @@ public interface IGateOperationService
     Task<PaymentResultDto> CollectPaymentAsync(CollectPaymentRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ExtraSlotRateDto>> GetExtraSlotRatesAsync(CancellationToken cancellationToken = default);
     Task<ExtraSlotInvoiceResultDto> CreateExtraSlotInvoiceAsync(CreateExtraSlotInvoiceRequest request, CancellationToken cancellationToken = default);
+    Task<PagedInvoiceResultDto> GetInvoicesAsync(InvoiceListQueryRequest request, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<InvoiceListItemDto>> ExportInvoicesAsync(InvoiceListQueryRequest request, CancellationToken cancellationToken = default);
+    Task<InvoiceListItemDto> GetInvoiceByIdAsync(int invoiceId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<InvoicePaymentDto>> GetInvoicePaymentsAsync(int invoiceId, CancellationToken cancellationToken = default);
+    Task<InvoiceListItemDto> CreateInvoiceAsync(CreateInvoiceRequest request, CancellationToken cancellationToken = default);
+    Task<InvoiceListItemDto> UpdateInvoiceAsync(int invoiceId, UpdateInvoiceRequest request, CancellationToken cancellationToken = default);
+    Task<InvoiceListItemDto> CancelInvoiceAsync(int invoiceId, CancelInvoiceRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<CompanyInvoiceDto>> GetCompanyInvoicesAsync(int companyId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<RecentActivityDto>> GetRecentActivityAsync(int take = 25, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<LiveParkingDto>> GetLiveParkingAsync(string? searchText = null, CancellationToken cancellationToken = default);

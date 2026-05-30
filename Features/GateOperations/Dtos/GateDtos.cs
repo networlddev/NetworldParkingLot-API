@@ -138,6 +138,61 @@ public sealed record CompanyInvoiceDto(
     string Status,
     string? Remarks);
 
+
+
+public sealed record InvoiceListItemDto(
+    int InvoiceId,
+    string InvoiceNo,
+    int CompanyId,
+    string CompanyCode,
+    string CompanyName,
+    string InvoiceType,
+    DateTime InvoiceDate,
+    DateTime? DueDate,
+    string? PlanType,
+    int Slots,
+    decimal SubTotal,
+    decimal DiscountAmount,
+    decimal VatAmount,
+    decimal TotalAmount,
+    decimal PaidAmount,
+    decimal BalanceAmount,
+    string Status,
+    int? SubscriptionId,
+    int? SessionId,
+    DateTime CreatedDate,
+    DateTime? ModifiedDate,
+    string? Remarks,
+    string? CancellationReason);
+
+public sealed record PagedInvoiceResultDto(
+    IReadOnlyList<InvoiceListItemDto> Items,
+    int Page,
+    int PageSize,
+    int TotalCount,
+    int TotalPages,
+    decimal TotalAmount,
+    decimal TotalPaidAmount,
+    decimal TotalPendingAmount,
+    int PaidCount,
+    int PartialCount,
+    int UnpaidCount,
+    int OverdueCount,
+    int CancelledCount);
+
+public sealed record InvoicePaymentDto(
+    int PaymentId,
+    string ReceiptNo,
+    int CompanyId,
+    int? InvoiceId,
+    string CompanyName,
+    decimal Amount,
+    string PaymentMode,
+    string? ReferenceNo,
+    DateTime PaymentDate,
+    string? Remarks,
+    int ReceivedBy);
+
 public sealed record RecentActivityDto(
     DateTime Time,
     string Type,

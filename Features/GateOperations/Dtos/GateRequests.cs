@@ -321,3 +321,103 @@ public sealed class RenewSubscriptionRequest
     [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
+
+
+public sealed class InvoiceListQueryRequest
+{
+    public string? SearchText { get; set; }
+    public string? Tab { get; set; } = "All";
+    public int? CompanyId { get; set; }
+    public string? InvoiceType { get; set; }
+    public string? Status { get; set; }
+    public DateTime? InvoiceFrom { get; set; }
+    public DateTime? InvoiceTo { get; set; }
+    public DateTime? DueFrom { get; set; }
+    public DateTime? DueTo { get; set; }
+    public string? SortBy { get; set; } = "InvoiceDate";
+    public string? SortDirection { get; set; } = "Desc";
+    public int Page { get; set; } = 1;
+    public int PageSize { get; set; } = 25;
+}
+
+public sealed class CreateInvoiceRequest
+{
+    [Range(1, int.MaxValue)]
+    public int CompanyId { get; set; }
+
+    [MaxLength(50)]
+    public string? InvoiceNo { get; set; }
+
+    [Required]
+    public string InvoiceType { get; set; } = "Manual";
+
+    public DateTime InvoiceDate { get; set; } = DateTime.Now;
+    public DateTime? DueDate { get; set; }
+
+    [MaxLength(30)]
+    public string? PlanType { get; set; }
+
+    [Range(0, 100000)]
+    public int Slots { get; set; }
+
+    [Range(0, double.MaxValue)]
+    public decimal SubTotal { get; set; }
+
+    [Range(0, double.MaxValue)]
+    public decimal DiscountAmount { get; set; }
+
+    [Range(0, double.MaxValue)]
+    public decimal VatAmount { get; set; }
+
+    [Range(0, double.MaxValue)]
+    public decimal TotalAmount { get; set; }
+
+    [Range(0, double.MaxValue)]
+    public decimal PaidAmount { get; set; }
+
+    public string PaymentMode { get; set; } = "Cash";
+    public string? ReferenceNo { get; set; }
+    public string? Remarks { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int OperatorId { get; set; }
+}
+
+public sealed class UpdateInvoiceRequest
+{
+    [Required]
+    public string InvoiceType { get; set; } = "Manual";
+
+    public DateTime InvoiceDate { get; set; } = DateTime.Now;
+    public DateTime? DueDate { get; set; }
+    public string? PlanType { get; set; }
+
+    [Range(0, 100000)]
+    public int Slots { get; set; }
+
+    [Range(0, double.MaxValue)]
+    public decimal SubTotal { get; set; }
+
+    [Range(0, double.MaxValue)]
+    public decimal DiscountAmount { get; set; }
+
+    [Range(0, double.MaxValue)]
+    public decimal VatAmount { get; set; }
+
+    [Range(0, double.MaxValue)]
+    public decimal TotalAmount { get; set; }
+
+    public string? Remarks { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int OperatorId { get; set; }
+}
+
+public sealed class CancelInvoiceRequest
+{
+    public string? Reason { get; set; }
+    public bool ClearPendingBalance { get; set; } = true;
+
+    [Range(1, int.MaxValue)]
+    public int OperatorId { get; set; }
+}

@@ -1192,6 +1192,224 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         return new ExtraSlotInvoiceResultDto(subscription.SubscriptionId, invoice.InvoiceId, invoice.InvoiceNo, company.CompanyId, request.AdditionalSlots, planType, total, balance, invoice.Status, "Extra slots added and invoice generated.");
     }
 
+
+    public async Task<PagedInvoiceResultDto> GetInvoicesAsync(InvoiceListQueryRequest request, CancellationToken cancellationToken = default)
+    {
+        request.Page = Math.Max(request.Page, 1);
+        request.PageSize = Math.Clamp(request.PageSize, 10, 100);
+
+        var all = await BuildInvoiceListItemsAsync(request, cancellationToken);
+        var sorted = SortInvoices(all, request.SortBy, request.SortDirection).ToList();
+        var total = sorted.Count;
+        var totalPages = Math.Max((int)Math.Ceiling(total / (double)request.PageSize), 1);
+        var page = Math.Min(request.Page, totalPages);
+        var items = sorted
+            .Skip((page - 1) * request.PageSize)
+            .Take(request.PageSize)
+            .ToList();
+
+        var today = DateTime.Today;
+        return new PagedInvoiceResultDto(
+            items,
+            page,
+            request.PageSize,
+            total,
+            totalPages,
+            sorted.Sum(x => x.TotalAmount),
+            sorted.Sum(x => x.PaidAmount),
+            sorted.Sum(x => x.BalanceAmount),
+            sorted.Count(x => x.Status.Equals(ParkingConstants.PaymentStatus.Paid, StringComparison.OrdinalIgnoreCase)),
+            sorted.Count(x => x.Status.Equals(ParkingConstants.PaymentStatus.Partial, StringComparison.OrdinalIgnoreCase)),
+            sorted.Count(x => x.Status.Equals(ParkingConstants.PaymentStatus.Unpaid, StringComparison.OrdinalIgnoreCase)),
+            sorted.Count(x => x.BalanceAmount > 0 && x.DueDate.HasValue && x.DueDate.Value.Date < today && !x.Status.Equals("Cancelled", StringComparison.OrdinalIgnoreCase)),
+            sorted.Count(x => x.Status.Equals("Cancelled", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    public async Task<IReadOnlyList<InvoiceListItemDto>> ExportInvoicesAsync(InvoiceListQueryRequest request, CancellationToken cancellationToken = default)
+    {
+        request.Page = 1;
+        request.PageSize = 5000;
+        var all = await BuildInvoiceListItemsAsync(request, cancellationToken);
+        return SortInvoices(all, request.SortBy, request.SortDirection).Take(5000).ToList();
+    }
+
+    public async Task<InvoiceListItemDto> GetInvoiceByIdAsync(int invoiceId, CancellationToken cancellationToken = default)
+    {
+        var invoice = await db.ParkingInvoices
+            .AsNoTracking()
+            .Include(x => x.Company)
+            .FirstOrDefaultAsync(x => x.InvoiceId == invoiceId, cancellationToken)
+            ?? throw new InvalidOperationException("Invoice not found.");
+
+        return ToInvoiceListItem(invoice);
+    }
+
+    public async Task<IReadOnlyList<InvoicePaymentDto>> GetInvoicePaymentsAsync(int invoiceId, CancellationToken cancellationToken = default)
+    {
+        var invoice = await db.ParkingInvoices
+            .AsNoTracking()
+            .Include(x => x.Company)
+            .FirstOrDefaultAsync(x => x.InvoiceId == invoiceId, cancellationToken)
+            ?? throw new InvalidOperationException("Invoice not found.");
+
+        var payments = await db.ParkingPayments
+            .AsNoTracking()
+            .Where(x => x.InvoiceId == invoiceId)
+            .OrderByDescending(x => x.PaymentDate)
+            .ThenByDescending(x => x.PaymentId)
+            .ToListAsync(cancellationToken);
+
+        return payments.Select(x => new InvoicePaymentDto(
+            x.PaymentId,
+            x.ReceiptNo,
+            x.CompanyId,
+            x.InvoiceId,
+            invoice.Company.CompanyName,
+            x.Amount,
+            x.PaymentMode,
+            x.ReferenceNo,
+            x.PaymentDate,
+            x.Remarks,
+            x.ReceivedBy)).ToList();
+    }
+
+    public async Task<InvoiceListItemDto> CreateInvoiceAsync(CreateInvoiceRequest request, CancellationToken cancellationToken = default)
+    {
+        var company = await db.ParkingCompanies.FirstOrDefaultAsync(x => x.CompanyId == request.CompanyId, cancellationToken)
+            ?? throw new InvalidOperationException("Company not found.");
+
+        var invoiceType = NormalizeInvoiceType(request.InvoiceType);
+        var invoiceDate = request.InvoiceDate == default ? DateTime.Now : request.InvoiceDate;
+        var subTotal = Math.Max(request.SubTotal, 0);
+        var discount = Math.Max(request.DiscountAmount, 0);
+        var vat = Math.Max(request.VatAmount, 0);
+        var total = request.TotalAmount > 0 ? request.TotalAmount : subTotal - discount + vat;
+        if (total < 0)
+            throw new InvalidOperationException("Invoice total cannot be negative.");
+
+        var paid = Math.Max(request.PaidAmount, 0);
+        if (paid > total)
+            throw new InvalidOperationException("Paid amount cannot be greater than invoice total.");
+
+        var invoiceNo = TrimOrNull(request.InvoiceNo) ?? await GenerateNextInvoiceNoAsync(cancellationToken);
+        var duplicate = await db.ParkingInvoices.AnyAsync(x => x.InvoiceNo == invoiceNo, cancellationToken);
+        if (duplicate)
+            throw new InvalidOperationException("Invoice number already exists.");
+
+        var balance = total - paid;
+        var invoice = new ParkingInvoice
+        {
+            InvoiceNo = invoiceNo,
+            CompanyId = company.CompanyId,
+            InvoiceType = invoiceType,
+            InvoiceDate = invoiceDate,
+            DueDate = request.DueDate,
+            PlanType = TrimOrNull(request.PlanType),
+            Slots = Math.Max(request.Slots, 0),
+            SubTotal = subTotal,
+            DiscountAmount = discount,
+            VatAmount = vat,
+            TotalAmount = total,
+            PaidAmount = paid,
+            BalanceAmount = balance,
+            Status = GetInvoiceStatus(balance, paid),
+            Remarks = TrimOrNull(request.Remarks),
+            CreatedDate = DateTime.Now,
+            CreatedBy = request.OperatorId
+        };
+
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+        await db.ParkingInvoices.AddAsync(invoice, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+
+        if (paid > 0)
+        {
+            var receiptNo = await GenerateNextReceiptNoAsync(cancellationToken);
+            await db.ParkingPayments.AddAsync(new ParkingPayment
+            {
+                ReceiptNo = receiptNo,
+                CompanyId = company.CompanyId,
+                InvoiceId = invoice.InvoiceId,
+                PaymentType = "Invoice",
+                Amount = paid,
+                PaymentMode = string.IsNullOrWhiteSpace(request.PaymentMode) ? "Cash" : request.PaymentMode.Trim(),
+                ReferenceNo = TrimOrNull(request.ReferenceNo),
+                ReceivedBy = request.OperatorId,
+                PaymentDate = DateTime.Now,
+                Remarks = "Initial payment collected while creating invoice."
+            }, cancellationToken);
+        }
+
+        await AddActivityAsync("InvoiceCreated", company.CompanyId, null, null, null, "Invoice Created", $"Invoice {invoice.InvoiceNo} created for AED {invoice.TotalAmount:n2}.", request.OperatorId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
+        return await GetInvoiceByIdAsync(invoice.InvoiceId, cancellationToken);
+    }
+
+    public async Task<InvoiceListItemDto> UpdateInvoiceAsync(int invoiceId, UpdateInvoiceRequest request, CancellationToken cancellationToken = default)
+    {
+        var invoice = await db.ParkingInvoices.Include(x => x.Company).FirstOrDefaultAsync(x => x.InvoiceId == invoiceId, cancellationToken)
+            ?? throw new InvalidOperationException("Invoice not found.");
+
+        if (invoice.Status.Equals("Cancelled", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Cancelled invoice cannot be edited.");
+
+        var subTotal = Math.Max(request.SubTotal, 0);
+        var discount = Math.Max(request.DiscountAmount, 0);
+        var vat = Math.Max(request.VatAmount, 0);
+        var total = request.TotalAmount > 0 ? request.TotalAmount : subTotal - discount + vat;
+        if (total < 0)
+            throw new InvalidOperationException("Invoice total cannot be negative.");
+        if (total < invoice.PaidAmount)
+            throw new InvalidOperationException($"Invoice total cannot be less than already paid amount AED {invoice.PaidAmount:n2}.");
+
+        invoice.InvoiceType = NormalizeInvoiceType(request.InvoiceType);
+        invoice.InvoiceDate = request.InvoiceDate == default ? invoice.InvoiceDate : request.InvoiceDate;
+        invoice.DueDate = request.DueDate;
+        invoice.PlanType = TrimOrNull(request.PlanType);
+        invoice.Slots = Math.Max(request.Slots, 0);
+        invoice.SubTotal = subTotal;
+        invoice.DiscountAmount = discount;
+        invoice.VatAmount = vat;
+        invoice.TotalAmount = total;
+        invoice.BalanceAmount = total - invoice.PaidAmount;
+        invoice.Status = GetInvoiceStatus(invoice.BalanceAmount, invoice.PaidAmount);
+        invoice.Remarks = TrimOrNull(request.Remarks);
+        invoice.ModifiedDate = DateTime.Now;
+        invoice.ModifiedBy = request.OperatorId;
+
+        await AddActivityAsync("InvoiceUpdated", invoice.CompanyId, invoice.SessionId, null, null, "Invoice Updated", $"Invoice {invoice.InvoiceNo} updated.", request.OperatorId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return ToInvoiceListItem(invoice);
+    }
+
+    public async Task<InvoiceListItemDto> CancelInvoiceAsync(int invoiceId, CancelInvoiceRequest request, CancellationToken cancellationToken = default)
+    {
+        var invoice = await db.ParkingInvoices.Include(x => x.Company).FirstOrDefaultAsync(x => x.InvoiceId == invoiceId, cancellationToken)
+            ?? throw new InvalidOperationException("Invoice not found.");
+
+        if (invoice.Status.Equals("Cancelled", StringComparison.OrdinalIgnoreCase))
+            return ToInvoiceListItem(invoice);
+
+        if (invoice.PaidAmount > 0 && !request.ClearPendingBalance)
+            throw new InvalidOperationException("Invoice has payment history. Enable clear pending balance to cancel it without deleting old payments.");
+
+        invoice.Status = "Cancelled";
+        if (request.ClearPendingBalance)
+            invoice.BalanceAmount = 0;
+        invoice.CancelledDate = DateTime.Now;
+        invoice.CancelledBy = request.OperatorId;
+        invoice.CancellationReason = TrimOrNull(request.Reason) ?? "Cancelled from invoice module.";
+        invoice.ModifiedDate = DateTime.Now;
+        invoice.ModifiedBy = request.OperatorId;
+        invoice.Remarks = AppendRemarks(invoice.Remarks, "Cancelled: " + invoice.CancellationReason);
+
+        await AddActivityAsync("InvoiceCancelled", invoice.CompanyId, invoice.SessionId, null, null, "Invoice Cancelled", $"Invoice {invoice.InvoiceNo} cancelled. {invoice.CancellationReason}", request.OperatorId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return ToInvoiceListItem(invoice);
+    }
+
     public async Task<IReadOnlyList<CompanyInvoiceDto>> GetCompanyInvoicesAsync(int companyId, CancellationToken cancellationToken = default)
     {
         var exists = await db.ParkingCompanies.AnyAsync(x => x.CompanyId == companyId, cancellationToken);
@@ -1831,6 +2049,143 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         return $"{span.Minutes} minutes";
     }
 
+
+
+    private async Task<IReadOnlyList<InvoiceListItemDto>> BuildInvoiceListItemsAsync(InvoiceListQueryRequest request, CancellationToken cancellationToken)
+    {
+        var query = db.ParkingInvoices
+            .AsNoTracking()
+            .Include(x => x.Company)
+            .AsQueryable();
+
+        var search = (request.SearchText ?? string.Empty).Trim();
+        if (search.Length > 0)
+        {
+            query = query.Where(x => x.InvoiceNo.Contains(search) ||
+                                     x.Company.CompanyName.Contains(search) ||
+                                     x.Company.CompanyCode.Contains(search) ||
+                                     (x.PlanType != null && x.PlanType.Contains(search)) ||
+                                     (x.Remarks != null && x.Remarks.Contains(search)));
+        }
+
+        if (request.CompanyId.HasValue && request.CompanyId.Value > 0)
+            query = query.Where(x => x.CompanyId == request.CompanyId.Value);
+
+        var invoiceType = NormalizeInvoiceTypeFilter(request.InvoiceType);
+        if (!string.IsNullOrWhiteSpace(invoiceType))
+            query = query.Where(x => x.InvoiceType == invoiceType);
+
+        var status = NormalizeInvoiceStatusFilter(request.Status);
+        if (!string.IsNullOrWhiteSpace(status))
+            query = query.Where(x => x.Status == status);
+
+        if (request.InvoiceFrom.HasValue)
+            query = query.Where(x => x.InvoiceDate.Date >= request.InvoiceFrom.Value.Date);
+        if (request.InvoiceTo.HasValue)
+            query = query.Where(x => x.InvoiceDate.Date <= request.InvoiceTo.Value.Date);
+        if (request.DueFrom.HasValue)
+            query = query.Where(x => x.DueDate.HasValue && x.DueDate.Value.Date >= request.DueFrom.Value.Date);
+        if (request.DueTo.HasValue)
+            query = query.Where(x => x.DueDate.HasValue && x.DueDate.Value.Date <= request.DueTo.Value.Date);
+
+        var list = await query.ToListAsync(cancellationToken);
+        var today = DateTime.Today;
+        var tab = (request.Tab ?? "All").Trim();
+        if (tab.Equals("Pending", StringComparison.OrdinalIgnoreCase))
+            list = list.Where(x => x.BalanceAmount > 0 && !x.Status.Equals("Cancelled", StringComparison.OrdinalIgnoreCase)).ToList();
+        else if (tab.Equals("Paid", StringComparison.OrdinalIgnoreCase))
+            list = list.Where(x => x.Status.Equals(ParkingConstants.PaymentStatus.Paid, StringComparison.OrdinalIgnoreCase)).ToList();
+        else if (tab.Equals("Partial", StringComparison.OrdinalIgnoreCase))
+            list = list.Where(x => x.Status.Equals(ParkingConstants.PaymentStatus.Partial, StringComparison.OrdinalIgnoreCase)).ToList();
+        else if (tab.Equals("Unpaid", StringComparison.OrdinalIgnoreCase))
+            list = list.Where(x => x.Status.Equals(ParkingConstants.PaymentStatus.Unpaid, StringComparison.OrdinalIgnoreCase)).ToList();
+        else if (tab.Equals("Overdue", StringComparison.OrdinalIgnoreCase))
+            list = list.Where(x => x.BalanceAmount > 0 && x.DueDate.HasValue && x.DueDate.Value.Date < today && !x.Status.Equals("Cancelled", StringComparison.OrdinalIgnoreCase)).ToList();
+        else if (tab.Equals("Cancelled", StringComparison.OrdinalIgnoreCase))
+            list = list.Where(x => x.Status.Equals("Cancelled", StringComparison.OrdinalIgnoreCase)).ToList();
+        else if (tab.Equals("Manual", StringComparison.OrdinalIgnoreCase))
+            list = list.Where(x => x.InvoiceType.Equals("Manual", StringComparison.OrdinalIgnoreCase)).ToList();
+        else if (tab.Equals("Subscription", StringComparison.OrdinalIgnoreCase))
+            list = list.Where(x => x.InvoiceType.Equals("Subscription", StringComparison.OrdinalIgnoreCase)).ToList();
+        else if (tab.Equals("ExtraSlot", StringComparison.OrdinalIgnoreCase) || tab.Equals("Extra Slot", StringComparison.OrdinalIgnoreCase))
+            list = list.Where(x => x.InvoiceType.Equals("ExtraSlot", StringComparison.OrdinalIgnoreCase)).ToList();
+        else if (tab.Equals("Overstay", StringComparison.OrdinalIgnoreCase))
+            list = list.Where(x => x.InvoiceType.Equals("Overstay", StringComparison.OrdinalIgnoreCase)).ToList();
+
+        return list.Select(ToInvoiceListItem).ToList();
+    }
+
+    private static IEnumerable<InvoiceListItemDto> SortInvoices(IEnumerable<InvoiceListItemDto> rows, string? sortBy, string? sortDirection)
+    {
+        var desc = (sortDirection ?? "Desc").Equals("Desc", StringComparison.OrdinalIgnoreCase);
+        var key = (sortBy ?? "InvoiceDate").Trim();
+        return key switch
+        {
+            "InvoiceNo" => desc ? rows.OrderByDescending(x => x.InvoiceNo) : rows.OrderBy(x => x.InvoiceNo),
+            "CompanyName" => desc ? rows.OrderByDescending(x => x.CompanyName) : rows.OrderBy(x => x.CompanyName),
+            "InvoiceType" => desc ? rows.OrderByDescending(x => x.InvoiceType) : rows.OrderBy(x => x.InvoiceType),
+            "DueDate" => desc ? rows.OrderByDescending(x => x.DueDate) : rows.OrderBy(x => x.DueDate),
+            "TotalAmount" => desc ? rows.OrderByDescending(x => x.TotalAmount) : rows.OrderBy(x => x.TotalAmount),
+            "PaidAmount" => desc ? rows.OrderByDescending(x => x.PaidAmount) : rows.OrderBy(x => x.PaidAmount),
+            "BalanceAmount" => desc ? rows.OrderByDescending(x => x.BalanceAmount) : rows.OrderBy(x => x.BalanceAmount),
+            "Status" => desc ? rows.OrderByDescending(x => x.Status) : rows.OrderBy(x => x.Status),
+            "CreatedDate" => desc ? rows.OrderByDescending(x => x.CreatedDate) : rows.OrderBy(x => x.CreatedDate),
+            _ => desc ? rows.OrderByDescending(x => x.InvoiceDate).ThenByDescending(x => x.InvoiceId) : rows.OrderBy(x => x.InvoiceDate).ThenBy(x => x.InvoiceId)
+        };
+    }
+
+    private static InvoiceListItemDto ToInvoiceListItem(ParkingInvoice x) => new(
+        x.InvoiceId,
+        x.InvoiceNo,
+        x.CompanyId,
+        x.Company?.CompanyCode ?? string.Empty,
+        x.Company?.CompanyName ?? string.Empty,
+        x.InvoiceType,
+        x.InvoiceDate,
+        x.DueDate,
+        x.PlanType,
+        x.Slots,
+        x.SubTotal,
+        x.DiscountAmount,
+        x.VatAmount,
+        x.TotalAmount,
+        x.PaidAmount,
+        x.BalanceAmount,
+        x.Status,
+        x.SubscriptionId,
+        x.SessionId,
+        x.CreatedDate,
+        x.ModifiedDate,
+        x.Remarks,
+        x.CancellationReason);
+
+    private static string NormalizeInvoiceType(string? invoiceType)
+    {
+        var value = (invoiceType ?? string.Empty).Trim().Replace(" ", string.Empty);
+        if (value.Equals("Subscription", StringComparison.OrdinalIgnoreCase)) return "Subscription";
+        if (value.Equals("ExtraSlot", StringComparison.OrdinalIgnoreCase)) return "ExtraSlot";
+        if (value.Equals("Overstay", StringComparison.OrdinalIgnoreCase)) return "Overstay";
+        if (value.Equals("Adjustment", StringComparison.OrdinalIgnoreCase)) return "Adjustment";
+        return "Manual";
+    }
+
+    private static string? NormalizeInvoiceTypeFilter(string? invoiceType)
+    {
+        var value = (invoiceType ?? string.Empty).Trim();
+        if (value.Length == 0 || value.Equals("All", StringComparison.OrdinalIgnoreCase)) return null;
+        return NormalizeInvoiceType(value);
+    }
+
+    private static string? NormalizeInvoiceStatusFilter(string? status)
+    {
+        var value = (status ?? string.Empty).Trim();
+        if (value.Length == 0 || value.Equals("All", StringComparison.OrdinalIgnoreCase)) return null;
+        if (value.Equals(ParkingConstants.PaymentStatus.Paid, StringComparison.OrdinalIgnoreCase)) return ParkingConstants.PaymentStatus.Paid;
+        if (value.Equals(ParkingConstants.PaymentStatus.Partial, StringComparison.OrdinalIgnoreCase)) return ParkingConstants.PaymentStatus.Partial;
+        if (value.Equals(ParkingConstants.PaymentStatus.Unpaid, StringComparison.OrdinalIgnoreCase)) return ParkingConstants.PaymentStatus.Unpaid;
+        if (value.Equals("Cancelled", StringComparison.OrdinalIgnoreCase)) return "Cancelled";
+        return null;
+    }
 
 
     private static string AppendRemarks(string? current, string addition) =>

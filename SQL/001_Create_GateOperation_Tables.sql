@@ -113,6 +113,11 @@ CREATE TABLE dbo.ParkingInvoices
     Remarks NVARCHAR(500) NULL,
     CreatedDate DATETIME2 NOT NULL DEFAULT SYSDATETIME(),
     CreatedBy INT NULL,
+    ModifiedDate DATETIME2 NULL,
+    ModifiedBy INT NULL,
+    CancelledDate DATETIME2 NULL,
+    CancelledBy INT NULL,
+    CancellationReason NVARCHAR(500) NULL,
     CONSTRAINT FK_ParkingInvoices_Companies FOREIGN KEY (CompanyId) REFERENCES dbo.ParkingCompanies(CompanyId)
 );
 GO

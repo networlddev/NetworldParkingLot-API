@@ -22,6 +22,11 @@ public sealed class ParkingInvoice
     public string? Remarks { get; set; }
     public DateTime CreatedDate { get; set; } = DateTime.Now;
     public int? CreatedBy { get; set; }
+    public DateTime? ModifiedDate { get; set; }
+    public int? ModifiedBy { get; set; }
+    public DateTime? CancelledDate { get; set; }
+    public int? CancelledBy { get; set; }
+    public string? CancellationReason { get; set; }
 
     public ParkingCompany Company { get; set; } = default!;
 }
