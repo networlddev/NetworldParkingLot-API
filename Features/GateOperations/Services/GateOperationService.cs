@@ -1485,22 +1485,214 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         }
 
         var sessions = await query.OrderByDescending(x => x.EntryTime).Take(500).ToListAsync(cancellationToken);
-        var result = new List<LiveParkingDto>();
-        foreach (var s in sessions)
-        {
-            var pending = await repository.GetPendingAmountAsync(s.CompanyId, cancellationToken);
-            result.Add(new LiveParkingDto(
-                s.SessionId,
-                s.BarcodeNo,
-                s.PlateNo,
-                s.Company.CompanyName,
-                s.EntryTime ?? s.CreatedDate,
-                FormatDuration(DateTime.Now - (s.EntryTime ?? s.CreatedDate)),
-                s.Subscription?.EndDate,
-                s.Status,
-                pending));
-        }
-        return result;
+        return sessions.Select(s => new LiveParkingDto(
+            s.SessionId,
+            s.BarcodeNo,
+            s.PlateNo,
+            s.Company.CompanyName,
+            s.EntryTime ?? s.CreatedDate,
+            FormatDuration(DateTime.Now - (s.EntryTime ?? s.CreatedDate)),
+            s.Subscription?.EndDate,
+            s.Status)).ToList();
+    }
+
+
+
+    public async Task<PagedLiveParkingResultDto> GetLiveParkingPagedAsync(LiveParkingListQueryRequest request, CancellationToken cancellationToken = default)
+    {
+        request.Page = Math.Max(request.Page, 1);
+        request.PageSize = Math.Clamp(request.PageSize, 10, 100);
+
+        var all = await BuildLiveParkingListItemsAsync(request, cancellationToken);
+        var sorted = SortLiveParking(all, request.SortBy, request.SortDirection).ToList();
+        var total = sorted.Count;
+        var totalPages = Math.Max((int)Math.Ceiling(total / (double)request.PageSize), 1);
+        var page = Math.Min(request.Page, totalPages);
+        var items = sorted.Skip((page - 1) * request.PageSize).Take(request.PageSize).ToList();
+
+        return new PagedLiveParkingResultDto(
+            items,
+            page,
+            request.PageSize,
+            total,
+            totalPages,
+            sorted.Count(x => x.Status.Equals(ParkingConstants.SessionStatus.Inside, StringComparison.OrdinalIgnoreCase)),
+            sorted.Count(x => x.OverstayDays > 0),
+            CountLiveParkingCompaniesWithPending(sorted),
+            sorted.Count(x => x.Status.Equals(ParkingConstants.SessionStatus.BarcodeGenerated, StringComparison.OrdinalIgnoreCase)),
+            sorted.Count(x => x.Status.Equals(ParkingConstants.SessionStatus.Exited, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    public async Task<IReadOnlyList<LiveParkingListItemDto>> ExportLiveParkingAsync(LiveParkingListQueryRequest request, CancellationToken cancellationToken = default)
+    {
+        request.Page = 1;
+        request.PageSize = 5000;
+        var all = await BuildLiveParkingListItemsAsync(request, cancellationToken);
+        return SortLiveParking(all, request.SortBy, request.SortDirection).Take(5000).ToList();
+    }
+
+    public async Task<PagedPaymentResultDto> GetPaymentsAsync(PaymentListQueryRequest request, CancellationToken cancellationToken = default)
+    {
+        request.Page = Math.Max(request.Page, 1);
+        request.PageSize = Math.Clamp(request.PageSize, 10, 100);
+
+        var all = await BuildPaymentListItemsAsync(request, cancellationToken);
+        var sorted = SortPayments(all, request.SortBy, request.SortDirection).ToList();
+        var total = sorted.Count;
+        var totalPages = Math.Max((int)Math.Ceiling(total / (double)request.PageSize), 1);
+        var page = Math.Min(request.Page, totalPages);
+        var items = sorted.Skip((page - 1) * request.PageSize).Take(request.PageSize).ToList();
+
+        var paymentModeGroups = sorted
+            .GroupBy(x => NormalizePaymentModeKey(x.PaymentMode))
+            .ToDictionary(x => x.Key, x => new { Count = x.Count(), Amount = x.Sum(y => y.Amount) });
+
+        var cash = paymentModeGroups.GetValueOrDefault("cash");
+        var card = paymentModeGroups.GetValueOrDefault("card");
+        var bank = paymentModeGroups.GetValueOrDefault("banktransfer");
+        var cheque = paymentModeGroups.GetValueOrDefault("cheque");
+        var otherModes = paymentModeGroups.Where(x => !PaymentModeKpiKeys.Contains(x.Key)).ToList();
+
+        return new PagedPaymentResultDto(
+            items,
+            page,
+            request.PageSize,
+            total,
+            totalPages,
+            sorted.Sum(x => x.Amount),
+            cash?.Count ?? 0,
+            card?.Count ?? 0,
+            bank?.Count ?? 0,
+            cheque?.Count ?? 0,
+            otherModes.Sum(x => x.Value.Count),
+            cash?.Amount ?? 0m,
+            card?.Amount ?? 0m,
+            bank?.Amount ?? 0m,
+            cheque?.Amount ?? 0m,
+            otherModes.Sum(x => x.Value.Amount));
+    }
+
+    public async Task<IReadOnlyList<PaymentListItemDto>> ExportPaymentsAsync(PaymentListQueryRequest request, CancellationToken cancellationToken = default)
+    {
+        request.Page = 1;
+        request.PageSize = 5000;
+        var all = await BuildPaymentListItemsAsync(request, cancellationToken);
+        return SortPayments(all, request.SortBy, request.SortDirection).Take(5000).ToList();
+    }
+
+    public async Task<PaymentListItemDto> GetPaymentByIdAsync(int paymentId, CancellationToken cancellationToken = default)
+    {
+        var rows = await BuildPaymentListItemsAsync(new PaymentListQueryRequest { PaymentId = paymentId, Page = 1, PageSize = 1 }, cancellationToken);
+        return rows.FirstOrDefault() ?? throw new InvalidOperationException("Payment not found.");
+    }
+
+    public async Task<PagedVehicleBarcodeResultDto> GetVehicleBarcodesAsync(VehicleBarcodeListQueryRequest request, CancellationToken cancellationToken = default)
+    {
+        request.Page = Math.Max(request.Page, 1);
+        request.PageSize = Math.Clamp(request.PageSize, 10, 100);
+
+        var all = await BuildVehicleBarcodeListItemsAsync(request, cancellationToken);
+        var sorted = SortVehicleBarcodes(all, request.SortBy, request.SortDirection).ToList();
+        var total = sorted.Count;
+        var totalPages = Math.Max((int)Math.Ceiling(total / (double)request.PageSize), 1);
+        var page = Math.Min(request.Page, totalPages);
+        var items = sorted.Skip((page - 1) * request.PageSize).Take(request.PageSize).ToList();
+
+        return new PagedVehicleBarcodeResultDto(
+            items,
+            page,
+            request.PageSize,
+            total,
+            totalPages,
+            sorted.Count(x => x.Status.Equals(ParkingConstants.SessionStatus.BarcodeGenerated, StringComparison.OrdinalIgnoreCase)),
+            sorted.Count(x => x.Status.Equals(ParkingConstants.SessionStatus.Inside, StringComparison.OrdinalIgnoreCase)),
+            sorted.Count(x => x.Status.Equals(ParkingConstants.SessionStatus.Exited, StringComparison.OrdinalIgnoreCase)),
+            sorted.Count(x => x.BarcodeStatus.Equals(ParkingConstants.BarcodeStatus.Invalid, StringComparison.OrdinalIgnoreCase)),
+            sorted.Count(x => x.OverstayDays > 0));
+    }
+
+    public async Task<IReadOnlyList<VehicleBarcodeListItemDto>> ExportVehicleBarcodesAsync(VehicleBarcodeListQueryRequest request, CancellationToken cancellationToken = default)
+    {
+        request.Page = 1;
+        request.PageSize = 5000;
+        var all = await BuildVehicleBarcodeListItemsAsync(request, cancellationToken);
+        return SortVehicleBarcodes(all, request.SortBy, request.SortDirection).Take(5000).ToList();
+    }
+
+    public async Task<VehicleBarcodeDetailDto> GetVehicleBarcodeDetailAsync(int sessionId, CancellationToken cancellationToken = default)
+    {
+        var session = await db.ParkingSessions
+            .AsNoTracking()
+            .Include(x => x.Company)
+            .Include(x => x.Subscription)
+            .FirstOrDefaultAsync(x => x.SessionId == sessionId, cancellationToken)
+            ?? throw new InvalidOperationException("Vehicle/barcode record not found.");
+
+        var pending = await GetSubscriptionPendingAmountAsync(session.CompanyId, cancellationToken);
+        var item = ToVehicleBarcodeListItem(session, pending);
+
+        var invoices = await db.ParkingInvoices
+            .AsNoTracking()
+            .Include(x => x.Company)
+            .Where(x => x.SessionId == session.SessionId)
+            .OrderByDescending(x => x.InvoiceDate)
+            .ToListAsync(cancellationToken);
+        var invoiceItems = invoices.Select(ToInvoiceListItem).ToList();
+        var invoiceIds = invoices.Select(x => x.InvoiceId).ToList();
+
+        var payments = await db.ParkingPayments
+            .AsNoTracking()
+            .Where(x => x.SessionId == session.SessionId || (x.InvoiceId.HasValue && invoiceIds.Contains(x.InvoiceId.Value)))
+            .OrderByDescending(x => x.PaymentDate)
+            .ThenByDescending(x => x.PaymentId)
+            .ToListAsync(cancellationToken);
+
+        var paymentItems = payments.Select(x => new InvoicePaymentDto(
+            x.PaymentId,
+            x.ReceiptNo,
+            x.CompanyId,
+            x.InvoiceId,
+            session.Company.CompanyName,
+            x.Amount,
+            x.PaymentMode,
+            x.ReferenceNo,
+            x.PaymentDate,
+            x.Remarks,
+            x.ReceivedBy)).ToList();
+
+        var history = await db.GateActivityLogs
+            .AsNoTracking()
+            .Where(x => x.SessionId == session.SessionId || x.BarcodeNo == session.BarcodeNo)
+            .OrderByDescending(x => x.ActionDate)
+            .Take(100)
+            .Select(x => new VehicleBarcodeHistoryDto(x.ActionDate, x.ActionType, x.Status, x.Message, x.OperatorId))
+            .ToListAsync(cancellationToken);
+
+        return new VehicleBarcodeDetailDto(item, invoiceItems, paymentItems, history);
+    }
+
+    public async Task<VehicleBarcodeDetailDto> MarkVehicleBarcodeInvalidAsync(int sessionId, MarkBarcodeInvalidRequest request, CancellationToken cancellationToken = default)
+    {
+        var session = await repository.GetSessionAsync(sessionId, cancellationToken)
+            ?? throw new InvalidOperationException("Vehicle/barcode record not found.");
+
+        if (session.Status == ParkingConstants.SessionStatus.Inside || session.BarcodeStatus == ParkingConstants.BarcodeStatus.Active)
+            throw new InvalidOperationException("This barcode is currently inside. Use exit or force exit before invalidating it.");
+
+        if (session.Status == ParkingConstants.SessionStatus.Exited || session.BarcodeStatus == ParkingConstants.BarcodeStatus.Used)
+            throw new InvalidOperationException("Used/exited barcode cannot be invalidated.");
+
+        if (string.IsNullOrWhiteSpace(request.Reason))
+            throw new InvalidOperationException("Invalidation reason is required.");
+
+        session.Status = ParkingConstants.SessionStatus.Cancelled;
+        session.BarcodeStatus = ParkingConstants.BarcodeStatus.Invalid;
+        session.Remarks = AppendRemarks(session.Remarks, "Invalidated: " + request.Reason.Trim());
+
+        await AddActivityAsync("BarcodeInvalidated", session.CompanyId, session.SessionId, session.BarcodeNo, session.PlateNo, "Barcode Invalidated", request.Reason.Trim(), request.OperatorId, cancellationToken);
+        await repository.SaveChangesAsync(cancellationToken);
+
+        return await GetVehicleBarcodeDetailAsync(sessionId, cancellationToken);
     }
 
     public async Task<IReadOnlyList<OutsideDisplayDto>> GetRecentOutsideDisplayScansAsync(int take = 30, CancellationToken cancellationToken = default)
@@ -2187,6 +2379,401 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         return null;
     }
 
+
+
+
+    private async Task<IReadOnlyList<LiveParkingListItemDto>> BuildLiveParkingListItemsAsync(LiveParkingListQueryRequest request, CancellationToken cancellationToken)
+    {
+        var query = db.ParkingSessions
+            .AsNoTracking()
+            .Include(x => x.Company)
+            .Include(x => x.Subscription)
+            .AsQueryable();
+
+        var tab = (request.Tab ?? "Inside").Trim();
+        if (tab.Equals("Inside", StringComparison.OrdinalIgnoreCase) || tab.Length == 0)
+            query = query.Where(x => x.Status == ParkingConstants.SessionStatus.Inside);
+        else if (tab.Equals("Generated", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.Status == ParkingConstants.SessionStatus.BarcodeGenerated);
+        else if (tab.Equals("Exited", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.Status == ParkingConstants.SessionStatus.Exited);
+        else if (tab.Equals("Invalid", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.BarcodeStatus == ParkingConstants.BarcodeStatus.Invalid || x.Status == ParkingConstants.SessionStatus.Cancelled || x.Status == ParkingConstants.SessionStatus.Rejected);
+        else if (tab.Equals("Overstay", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.Status == ParkingConstants.SessionStatus.Inside && x.Subscription != null && x.Subscription.EndDate.Date < DateTime.Today);
+
+        ApplySessionBaseFilters(ref query, request.SearchText, request.CompanyId, request.Status, null, null);
+
+        if (request.EntryFrom.HasValue)
+            query = query.Where(x => x.EntryTime.HasValue && x.EntryTime.Value.Date >= request.EntryFrom.Value.Date);
+        if (request.EntryTo.HasValue)
+            query = query.Where(x => x.EntryTime.HasValue && x.EntryTime.Value.Date <= request.EntryTo.Value.Date);
+
+        var sessions = await query.Take(5000).ToListAsync(cancellationToken);
+        var pendingMap = await GetPendingAmountMapAsync(sessions.Select(x => x.CompanyId), cancellationToken);
+        var rows = sessions.Select(x => ToLiveParkingListItem(x, pendingMap.GetValueOrDefault(x.CompanyId))).ToList();
+
+        if (request.OverstayOnly == true)
+            rows = rows.Where(x => x.OverstayDays > 0).ToList();
+
+        var paymentStatus = (request.PaymentStatus ?? string.Empty).Trim();
+        if (paymentStatus.Length > 0 && !paymentStatus.Equals("All", StringComparison.OrdinalIgnoreCase))
+            rows = rows.Where(x => x.PaymentStatus.Equals(paymentStatus, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        if (tab.Equals("PaymentDue", StringComparison.OrdinalIgnoreCase))
+            rows = rows.Where(x => !x.PaymentStatus.Equals(ParkingConstants.PaymentStatus.Paid, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        return rows;
+    }
+
+    private async Task<IReadOnlyList<VehicleBarcodeListItemDto>> BuildVehicleBarcodeListItemsAsync(VehicleBarcodeListQueryRequest request, CancellationToken cancellationToken)
+    {
+        var query = db.ParkingSessions
+            .AsNoTracking()
+            .Include(x => x.Company)
+            .Include(x => x.Subscription)
+            .AsQueryable();
+
+        var tab = (request.Tab ?? "All").Trim();
+        if (tab.Equals("Generated", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.Status == ParkingConstants.SessionStatus.BarcodeGenerated);
+        else if (tab.Equals("Inside", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.Status == ParkingConstants.SessionStatus.Inside);
+        else if (tab.Equals("Exited", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.Status == ParkingConstants.SessionStatus.Exited);
+        else if (tab.Equals("Invalid", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.BarcodeStatus == ParkingConstants.BarcodeStatus.Invalid || x.Status == ParkingConstants.SessionStatus.Cancelled || x.Status == ParkingConstants.SessionStatus.Rejected);
+        else if (tab.Equals("Overstay", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.OverstayDays > 0 || (x.Status == ParkingConstants.SessionStatus.Inside && x.Subscription != null && x.Subscription.EndDate.Date < DateTime.Today));
+
+        ApplySessionBaseFilters(ref query, request.SearchText, request.CompanyId, request.Status, request.BarcodeStatus, request.VehicleType);
+
+        if (request.EntryFrom.HasValue)
+            query = query.Where(x => x.EntryTime.HasValue && x.EntryTime.Value.Date >= request.EntryFrom.Value.Date);
+        if (request.EntryTo.HasValue)
+            query = query.Where(x => x.EntryTime.HasValue && x.EntryTime.Value.Date <= request.EntryTo.Value.Date);
+        if (request.ExitFrom.HasValue)
+            query = query.Where(x => x.ExitTime.HasValue && x.ExitTime.Value.Date >= request.ExitFrom.Value.Date);
+        if (request.ExitTo.HasValue)
+            query = query.Where(x => x.ExitTime.HasValue && x.ExitTime.Value.Date <= request.ExitTo.Value.Date);
+        if (request.CreatedFrom.HasValue)
+            query = query.Where(x => x.CreatedDate.Date >= request.CreatedFrom.Value.Date);
+        if (request.CreatedTo.HasValue)
+            query = query.Where(x => x.CreatedDate.Date <= request.CreatedTo.Value.Date);
+
+        var sessions = await query.Take(5000).ToListAsync(cancellationToken);
+        var pendingMap = await GetPendingAmountMapAsync(sessions.Select(x => x.CompanyId), cancellationToken);
+        return sessions.Select(x => ToVehicleBarcodeListItem(x, pendingMap.GetValueOrDefault(x.CompanyId))).ToList();
+    }
+
+    private static void ApplySessionBaseFilters(ref IQueryable<ParkingSession> query, string? searchText, int? companyId, string? status, string? barcodeStatus, string? vehicleType)
+    {
+        var search = (searchText ?? string.Empty).Trim();
+        if (search.Length > 0)
+        {
+            query = query.Where(x => x.BarcodeNo.Contains(search) ||
+                                     (x.PlateNo != null && x.PlateNo.Contains(search)) ||
+                                     x.Company.CompanyName.Contains(search) ||
+                                     x.Company.CompanyCode.Contains(search) ||
+                                     (x.DriverName != null && x.DriverName.Contains(search)) ||
+                                     (x.DriverMobile != null && x.DriverMobile.Contains(search)));
+        }
+
+        if (companyId.HasValue && companyId.Value > 0)
+            query = query.Where(x => x.CompanyId == companyId.Value);
+
+        var statusValue = (status ?? string.Empty).Trim();
+        if (statusValue.Length > 0 && !statusValue.Equals("All", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.Status == statusValue);
+
+        var barcodeStatusValue = (barcodeStatus ?? string.Empty).Trim();
+        if (barcodeStatusValue.Length > 0 && !barcodeStatusValue.Equals("All", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.BarcodeStatus == barcodeStatusValue);
+
+        var vehicleTypeValue = (vehicleType ?? string.Empty).Trim();
+        if (vehicleTypeValue.Length > 0 && !vehicleTypeValue.Equals("All", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.VehicleType == vehicleTypeValue);
+    }
+
+    private async Task<IReadOnlyList<PaymentListItemDto>> BuildPaymentListItemsAsync(PaymentListQueryRequest request, CancellationToken cancellationToken)
+    {
+        var query = db.ParkingPayments
+            .AsNoTracking()
+            .Include(x => x.Company)
+            .AsQueryable();
+
+        if (request.CompanyId.HasValue && request.CompanyId.Value > 0)
+            query = query.Where(x => x.CompanyId == request.CompanyId.Value);
+        if (request.PaymentId.HasValue && request.PaymentId.Value > 0)
+            query = query.Where(x => x.PaymentId == request.PaymentId.Value);
+        if (request.InvoiceId.HasValue && request.InvoiceId.Value > 0)
+            query = query.Where(x => x.InvoiceId == request.InvoiceId.Value);
+        if (request.SessionId.HasValue && request.SessionId.Value > 0)
+            query = query.Where(x => x.SessionId == request.SessionId.Value);
+
+        var mode = (request.PaymentMode ?? string.Empty).Trim();
+        if (mode.Length > 0 && !mode.Equals("All", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.PaymentMode == mode);
+
+        var type = (request.PaymentType ?? string.Empty).Trim();
+        if (type.Length > 0 && !type.Equals("All", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.PaymentType == type);
+
+        if (request.DateFrom.HasValue)
+            query = query.Where(x => x.PaymentDate.Date >= request.DateFrom.Value.Date);
+        if (request.DateTo.HasValue)
+            query = query.Where(x => x.PaymentDate.Date <= request.DateTo.Value.Date);
+
+        var search = (request.SearchText ?? string.Empty).Trim();
+        if (search.Length > 0)
+        {
+            query = query.Where(x => x.ReceiptNo.Contains(search) ||
+                                     x.Company.CompanyName.Contains(search) ||
+                                     x.Company.CompanyCode.Contains(search) ||
+                                     (x.ReferenceNo != null && x.ReferenceNo.Contains(search)) ||
+                                     (x.Remarks != null && x.Remarks.Contains(search)));
+        }
+
+        var tab = (request.Tab ?? "All").Trim();
+        if (tab.Equals("Today", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.PaymentDate.Date == DateTime.Today);
+        else if (tab.Equals("Invoice", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.InvoiceId != null && x.SessionId == null);
+        else if (tab.Equals("Gate", StringComparison.OrdinalIgnoreCase) || tab.Equals("GateCollection", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.SessionId != null || x.PaymentType == "GateCollection");
+
+        var payments = await query.Take(5000).ToListAsync(cancellationToken);
+        var invoiceIds = payments.Where(x => x.InvoiceId.HasValue).Select(x => x.InvoiceId!.Value).Distinct().ToList();
+        var sessionIds = payments.Where(x => x.SessionId.HasValue).Select(x => x.SessionId!.Value).Distinct().ToList();
+
+        var invoices = invoiceIds.Count == 0
+            ? new Dictionary<int, string>()
+            : await db.ParkingInvoices.AsNoTracking().Where(x => invoiceIds.Contains(x.InvoiceId)).ToDictionaryAsync(x => x.InvoiceId, x => x.InvoiceNo, cancellationToken);
+        var sessions = sessionIds.Count == 0
+            ? new Dictionary<int, string>()
+            : await db.ParkingSessions.AsNoTracking().Where(x => sessionIds.Contains(x.SessionId)).ToDictionaryAsync(x => x.SessionId, x => x.BarcodeNo, cancellationToken);
+
+        return payments.Select(x => new PaymentListItemDto(
+            x.PaymentId,
+            x.ReceiptNo,
+            x.CompanyId,
+            x.Company.CompanyCode,
+            x.Company.CompanyName,
+            x.InvoiceId,
+            x.InvoiceId.HasValue && invoices.TryGetValue(x.InvoiceId.Value, out var invoiceNo) ? invoiceNo : null,
+            x.SessionId,
+            x.SessionId.HasValue && sessions.TryGetValue(x.SessionId.Value, out var barcodeNo) ? barcodeNo : null,
+            x.PaymentType,
+            x.Amount,
+            x.PaymentMode,
+            x.ReferenceNo,
+            x.PaymentDate,
+            x.Remarks,
+            x.ReceivedBy)).ToList();
+    }
+
+    private async Task<decimal> GetSubscriptionPendingAmountAsync(int companyId, CancellationToken cancellationToken)
+    {
+        var map = await GetPendingAmountMapAsync(new[] { companyId }, cancellationToken);
+        return map.GetValueOrDefault(companyId);
+    }
+
+    private async Task<Dictionary<int, decimal>> GetPendingAmountMapAsync(IEnumerable<int> companyIds, CancellationToken cancellationToken)
+    {
+        var ids = companyIds.Distinct().Where(x => x > 0).ToList();
+        if (ids.Count == 0)
+            return new Dictionary<int, decimal>();
+
+        var subscriptions = await db.ParkingSubscriptions
+            .AsNoTracking()
+            .Where(x => ids.Contains(x.CompanyId) && x.Status != ParkingConstants.SubscriptionStatus.Cancelled)
+            .Select(x => new
+            {
+                x.SubscriptionId,
+                x.CompanyId,
+                x.BalanceAmount
+            })
+            .ToListAsync(cancellationToken);
+
+        if (subscriptions.Count == 0)
+            return new Dictionary<int, decimal>();
+
+        var subscriptionIds = subscriptions.Select(x => x.SubscriptionId).ToList();
+        var invoices = await db.ParkingInvoices
+            .AsNoTracking()
+            .Where(x => x.SubscriptionId.HasValue && subscriptionIds.Contains(x.SubscriptionId.Value) && x.Status != "Cancelled")
+            .Select(x => new
+            {
+                SubscriptionId = x.SubscriptionId.Value,
+                x.InvoiceDate,
+                x.InvoiceId,
+                x.BalanceAmount
+            })
+            .ToListAsync(cancellationToken);
+
+        var latestInvoiceBySubscription = invoices
+            .GroupBy(x => x.SubscriptionId)
+            .ToDictionary(
+                x => x.Key,
+                x => x.OrderByDescending(y => y.InvoiceDate).ThenByDescending(y => y.InvoiceId).First());
+
+        var result = new Dictionary<int, decimal>();
+        foreach (var subscription in subscriptions)
+        {
+            latestInvoiceBySubscription.TryGetValue(subscription.SubscriptionId, out var invoice);
+            var pending = invoice?.BalanceAmount ?? subscription.BalanceAmount;
+            if (pending <= 0)
+                continue;
+
+            result[subscription.CompanyId] = result.GetValueOrDefault(subscription.CompanyId) + pending;
+        }
+
+        return result;
+    }
+
+    private static readonly HashSet<string> PaymentModeKpiKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "cash",
+        "card",
+        "banktransfer",
+        "cheque"
+    };
+
+    private static string NormalizePaymentModeKey(string? paymentMode)
+    {
+        return (paymentMode ?? string.Empty)
+            .Replace(" ", string.Empty)
+            .Replace("-", string.Empty)
+            .Replace("_", string.Empty)
+            .Trim()
+            .ToLowerInvariant();
+    }
+
+    private static int CountLiveParkingCompaniesWithPending(IEnumerable<LiveParkingListItemDto> rows)
+    {
+        return rows
+            .Where(x => !x.PaymentStatus.Equals(ParkingConstants.PaymentStatus.Paid, StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.CompanyId)
+            .Distinct()
+            .Count();
+    }
+
+    private static LiveParkingListItemDto ToLiveParkingListItem(ParkingSession s, decimal pendingAmount)
+    {
+        var now = DateTime.Now;
+        var entry = s.EntryTime ?? s.CreatedDate;
+        var validUntil = s.Subscription?.EndDate;
+        var overstayDays = s.Status == ParkingConstants.SessionStatus.Inside && validUntil.HasValue && validUntil.Value.Date < now.Date
+            ? (now.Date - validUntil.Value.Date).Days
+            : Math.Max(s.OverstayDays, 0);
+        var overstayAmount = s.OverstayAmount;
+        var paymentStatus = pendingAmount <= 0 ? ParkingConstants.PaymentStatus.Paid : ParkingConstants.PaymentStatus.Unpaid;
+
+        return new LiveParkingListItemDto(
+            s.SessionId,
+            s.BarcodeNo,
+            s.CompanyId,
+            s.Company.CompanyCode,
+            s.Company.CompanyName,
+            s.PlateNo,
+            s.VehicleType,
+            s.DriverName,
+            s.DriverMobile,
+            s.EntryTime,
+            FormatDuration(now - entry),
+            validUntil,
+            overstayDays,
+            overstayAmount,
+            paymentStatus,
+            s.Status,
+            s.BarcodeStatus,
+            s.EntryOperatorId,
+            s.Remarks);
+    }
+
+    private static VehicleBarcodeListItemDto ToVehicleBarcodeListItem(ParkingSession s, decimal pendingAmount)
+    {
+        var now = DateTime.Now;
+        var durationEnd = s.ExitTime ?? now;
+        var durationStart = s.EntryTime ?? s.CreatedDate;
+        var validUntil = s.Subscription?.EndDate;
+        var overstayDays = s.Status == ParkingConstants.SessionStatus.Inside && validUntil.HasValue && validUntil.Value.Date < now.Date
+            ? (now.Date - validUntil.Value.Date).Days
+            : Math.Max(s.OverstayDays, 0);
+        var paymentStatus = pendingAmount <= 0 ? ParkingConstants.PaymentStatus.Paid : ParkingConstants.PaymentStatus.Unpaid;
+
+        return new VehicleBarcodeListItemDto(
+            s.SessionId,
+            s.BarcodeNo,
+            s.CompanyId,
+            s.Company.CompanyCode,
+            s.Company.CompanyName,
+            s.PlateNo,
+            s.VehicleType,
+            s.DriverName,
+            s.DriverMobile,
+            s.CreatedDate,
+            s.EntryTime,
+            s.ExitTime,
+            FormatDuration(durationEnd - durationStart),
+            validUntil,
+            s.Status,
+            s.BarcodeStatus,
+            overstayDays,
+            s.OverstayAmount,
+            paymentStatus,
+            s.ForceExit,
+            s.ForceExitReason,
+            s.CreatedBy,
+            s.EntryOperatorId,
+            s.ExitOperatorId,
+            s.Remarks);
+    }
+
+    private static IEnumerable<LiveParkingListItemDto> SortLiveParking(IEnumerable<LiveParkingListItemDto> rows, string? sortBy, string? sortDirection)
+    {
+        var desc = (sortDirection ?? "Desc").Equals("Desc", StringComparison.OrdinalIgnoreCase);
+        var key = (sortBy ?? "EntryTime").Trim();
+        return key switch
+        {
+            "BarcodeNo" => desc ? rows.OrderByDescending(x => x.BarcodeNo) : rows.OrderBy(x => x.BarcodeNo),
+            "CompanyName" => desc ? rows.OrderByDescending(x => x.CompanyName) : rows.OrderBy(x => x.CompanyName),
+            "PlateNo" => desc ? rows.OrderByDescending(x => x.PlateNo) : rows.OrderBy(x => x.PlateNo),
+            "OverstayDays" => desc ? rows.OrderByDescending(x => x.OverstayDays) : rows.OrderBy(x => x.OverstayDays),
+            _ => desc ? rows.OrderByDescending(x => x.EntryTime).ThenByDescending(x => x.SessionId) : rows.OrderBy(x => x.EntryTime).ThenBy(x => x.SessionId)
+        };
+    }
+
+    private static IEnumerable<PaymentListItemDto> SortPayments(IEnumerable<PaymentListItemDto> rows, string? sortBy, string? sortDirection)
+    {
+        var desc = (sortDirection ?? "Desc").Equals("Desc", StringComparison.OrdinalIgnoreCase);
+        var key = (sortBy ?? "PaymentDate").Trim();
+        return key switch
+        {
+            "ReceiptNo" => desc ? rows.OrderByDescending(x => x.ReceiptNo) : rows.OrderBy(x => x.ReceiptNo),
+            "CompanyName" => desc ? rows.OrderByDescending(x => x.CompanyName) : rows.OrderBy(x => x.CompanyName),
+            "InvoiceNo" => desc ? rows.OrderByDescending(x => x.InvoiceNo) : rows.OrderBy(x => x.InvoiceNo),
+            "Amount" => desc ? rows.OrderByDescending(x => x.Amount) : rows.OrderBy(x => x.Amount),
+            "PaymentMode" => desc ? rows.OrderByDescending(x => x.PaymentMode) : rows.OrderBy(x => x.PaymentMode),
+            _ => desc ? rows.OrderByDescending(x => x.PaymentDate).ThenByDescending(x => x.PaymentId) : rows.OrderBy(x => x.PaymentDate).ThenBy(x => x.PaymentId)
+        };
+    }
+
+    private static IEnumerable<VehicleBarcodeListItemDto> SortVehicleBarcodes(IEnumerable<VehicleBarcodeListItemDto> rows, string? sortBy, string? sortDirection)
+    {
+        var desc = (sortDirection ?? "Desc").Equals("Desc", StringComparison.OrdinalIgnoreCase);
+        var key = (sortBy ?? "CreatedDate").Trim();
+        return key switch
+        {
+            "BarcodeNo" => desc ? rows.OrderByDescending(x => x.BarcodeNo) : rows.OrderBy(x => x.BarcodeNo),
+            "CompanyName" => desc ? rows.OrderByDescending(x => x.CompanyName) : rows.OrderBy(x => x.CompanyName),
+            "PlateNo" => desc ? rows.OrderByDescending(x => x.PlateNo) : rows.OrderBy(x => x.PlateNo),
+            "EntryTime" => desc ? rows.OrderByDescending(x => x.EntryTime) : rows.OrderBy(x => x.EntryTime),
+            "ExitTime" => desc ? rows.OrderByDescending(x => x.ExitTime) : rows.OrderBy(x => x.ExitTime),
+            "Status" => desc ? rows.OrderByDescending(x => x.Status) : rows.OrderBy(x => x.Status),
+            _ => desc ? rows.OrderByDescending(x => x.CreatedDate).ThenByDescending(x => x.SessionId) : rows.OrderBy(x => x.CreatedDate).ThenBy(x => x.SessionId)
+        };
+    }
 
     private static string AppendRemarks(string? current, string addition) =>
         string.IsNullOrWhiteSpace(current) ? addition : current + Environment.NewLine + addition;

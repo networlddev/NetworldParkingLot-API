@@ -323,6 +323,72 @@ public sealed class RenewSubscriptionRequest
 }
 
 
+
+
+public sealed class LiveParkingListQueryRequest
+{
+    public string? SearchText { get; set; }
+    public string? Tab { get; set; } = "Inside";
+    public int? CompanyId { get; set; }
+    public string? Status { get; set; }
+    public string? PaymentStatus { get; set; }
+    public bool? OverstayOnly { get; set; }
+    public DateTime? EntryFrom { get; set; }
+    public DateTime? EntryTo { get; set; }
+    public string? SortBy { get; set; } = "EntryTime";
+    public string? SortDirection { get; set; } = "Desc";
+    public int Page { get; set; } = 1;
+    public int PageSize { get; set; } = 25;
+}
+
+public sealed class PaymentListQueryRequest
+{
+    public string? SearchText { get; set; }
+    public string? Tab { get; set; } = "All";
+    public int? CompanyId { get; set; }
+    public int? PaymentId { get; set; }
+    public int? InvoiceId { get; set; }
+    public int? SessionId { get; set; }
+    public string? PaymentMode { get; set; }
+    public string? PaymentType { get; set; }
+    public DateTime? DateFrom { get; set; }
+    public DateTime? DateTo { get; set; }
+    public string? SortBy { get; set; } = "PaymentDate";
+    public string? SortDirection { get; set; } = "Desc";
+    public int Page { get; set; } = 1;
+    public int PageSize { get; set; } = 25;
+}
+
+public sealed class VehicleBarcodeListQueryRequest
+{
+    public string? SearchText { get; set; }
+    public string? Tab { get; set; } = "All";
+    public int? CompanyId { get; set; }
+    public string? Status { get; set; }
+    public string? BarcodeStatus { get; set; }
+    public string? VehicleType { get; set; }
+    public DateTime? EntryFrom { get; set; }
+    public DateTime? EntryTo { get; set; }
+    public DateTime? ExitFrom { get; set; }
+    public DateTime? ExitTo { get; set; }
+    public DateTime? CreatedFrom { get; set; }
+    public DateTime? CreatedTo { get; set; }
+    public string? SortBy { get; set; } = "CreatedDate";
+    public string? SortDirection { get; set; } = "Desc";
+    public int Page { get; set; } = 1;
+    public int PageSize { get; set; } = 25;
+}
+
+public sealed class MarkBarcodeInvalidRequest
+{
+    [Required]
+    [MaxLength(500)]
+    public string Reason { get; set; } = string.Empty;
+
+    [Range(1, int.MaxValue)]
+    public int OperatorId { get; set; }
+}
+
 public sealed class InvoiceListQueryRequest
 {
     public string? SearchText { get; set; }

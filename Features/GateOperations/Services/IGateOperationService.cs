@@ -36,6 +36,15 @@ public interface IGateOperationService
     Task<IReadOnlyList<CompanyInvoiceDto>> GetCompanyInvoicesAsync(int companyId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<RecentActivityDto>> GetRecentActivityAsync(int take = 25, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<LiveParkingDto>> GetLiveParkingAsync(string? searchText = null, CancellationToken cancellationToken = default);
+    Task<PagedLiveParkingResultDto> GetLiveParkingPagedAsync(LiveParkingListQueryRequest request, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<LiveParkingListItemDto>> ExportLiveParkingAsync(LiveParkingListQueryRequest request, CancellationToken cancellationToken = default);
+    Task<VehicleBarcodeDetailDto> GetVehicleBarcodeDetailAsync(int sessionId, CancellationToken cancellationToken = default);
+    Task<PagedPaymentResultDto> GetPaymentsAsync(PaymentListQueryRequest request, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<PaymentListItemDto>> ExportPaymentsAsync(PaymentListQueryRequest request, CancellationToken cancellationToken = default);
+    Task<PaymentListItemDto> GetPaymentByIdAsync(int paymentId, CancellationToken cancellationToken = default);
+    Task<PagedVehicleBarcodeResultDto> GetVehicleBarcodesAsync(VehicleBarcodeListQueryRequest request, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<VehicleBarcodeListItemDto>> ExportVehicleBarcodesAsync(VehicleBarcodeListQueryRequest request, CancellationToken cancellationToken = default);
+    Task<VehicleBarcodeDetailDto> MarkVehicleBarcodeInvalidAsync(int sessionId, MarkBarcodeInvalidRequest request, CancellationToken cancellationToken = default);
     Task<OutsideDisplayDto?> GetLatestOutsideDisplayAsync(CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<OutsideDisplayDto>> GetRecentOutsideDisplayScansAsync(int take = 30, CancellationToken cancellationToken = default);

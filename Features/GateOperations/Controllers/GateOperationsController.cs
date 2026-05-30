@@ -565,6 +565,316 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
         return Ok(ApiResponse<IReadOnlyList<LiveParkingDto>>.Ok(data));
     }
 
+
+
+    [HttpGet("live-parking/list")]
+    public async Task<ActionResult<ApiResponse<PagedLiveParkingResultDto>>> GetLiveParkingPaged(
+        [FromQuery] string? searchText,
+        [FromQuery] string? tab,
+        [FromQuery] int? companyId,
+        [FromQuery] string? status,
+        [FromQuery] string? paymentStatus,
+        [FromQuery] bool? overstayOnly,
+        [FromQuery] DateTime? entryFrom,
+        [FromQuery] DateTime? entryTo,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 25,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new LiveParkingListQueryRequest
+        {
+            SearchText = searchText,
+            Tab = tab,
+            CompanyId = companyId,
+            Status = status,
+            PaymentStatus = paymentStatus,
+            OverstayOnly = overstayOnly,
+            EntryFrom = entryFrom,
+            EntryTo = entryTo,
+            SortBy = sortBy,
+            SortDirection = sortDirection,
+            Page = page,
+            PageSize = pageSize
+        };
+
+        var data = await service.GetLiveParkingPagedAsync(request, cancellationToken);
+        return Ok(ApiResponse<PagedLiveParkingResultDto>.Ok(data));
+    }
+
+    [HttpGet("live-parking/export")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<LiveParkingListItemDto>>>> ExportLiveParking(
+        [FromQuery] string? searchText,
+        [FromQuery] string? tab,
+        [FromQuery] int? companyId,
+        [FromQuery] string? status,
+        [FromQuery] string? paymentStatus,
+        [FromQuery] bool? overstayOnly,
+        [FromQuery] DateTime? entryFrom,
+        [FromQuery] DateTime? entryTo,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new LiveParkingListQueryRequest
+        {
+            SearchText = searchText,
+            Tab = tab,
+            CompanyId = companyId,
+            Status = status,
+            PaymentStatus = paymentStatus,
+            OverstayOnly = overstayOnly,
+            EntryFrom = entryFrom,
+            EntryTo = entryTo,
+            SortBy = sortBy,
+            SortDirection = sortDirection,
+            Page = 1,
+            PageSize = 5000
+        };
+
+        var data = await service.ExportLiveParkingAsync(request, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<LiveParkingListItemDto>>.Ok(data));
+    }
+
+    [HttpGet("live-parking/{sessionId:int}")]
+    public async Task<ActionResult<ApiResponse<VehicleBarcodeDetailDto>>> GetLiveParkingDetail(int sessionId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.GetVehicleBarcodeDetailAsync(sessionId, cancellationToken);
+            return Ok(ApiResponse<VehicleBarcodeDetailDto>.Ok(data));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return NotFound(ApiResponse<VehicleBarcodeDetailDto>.Fail(ex.Message));
+        }
+    }
+
+    [HttpPost("live-parking/{sessionId:int}/force-exit")]
+    public async Task<ActionResult<ApiResponse<ExitResultDto>>> ForceExitLiveParking(int sessionId, [FromBody] AllowExitRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            request.SessionId = sessionId;
+            request.ForceAllow = true;
+            var data = await service.AllowExitAsync(request, cancellationToken);
+            return Ok(ApiResponse<ExitResultDto>.Ok(data, "Force exit completed."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ApiResponse<ExitResultDto>.Fail(ex.Message));
+        }
+    }
+
+    [HttpGet("payments")]
+    public async Task<ActionResult<ApiResponse<PagedPaymentResultDto>>> GetPayments(
+        [FromQuery] string? searchText,
+        [FromQuery] string? tab,
+        [FromQuery] int? companyId,
+        [FromQuery] int? invoiceId,
+        [FromQuery] int? sessionId,
+        [FromQuery] string? paymentMode,
+        [FromQuery] string? paymentType,
+        [FromQuery] DateTime? dateFrom,
+        [FromQuery] DateTime? dateTo,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 25,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new PaymentListQueryRequest
+        {
+            SearchText = searchText,
+            Tab = tab,
+            CompanyId = companyId,
+            InvoiceId = invoiceId,
+            SessionId = sessionId,
+            PaymentMode = paymentMode,
+            PaymentType = paymentType,
+            DateFrom = dateFrom,
+            DateTo = dateTo,
+            SortBy = sortBy,
+            SortDirection = sortDirection,
+            Page = page,
+            PageSize = pageSize
+        };
+
+        var data = await service.GetPaymentsAsync(request, cancellationToken);
+        return Ok(ApiResponse<PagedPaymentResultDto>.Ok(data));
+    }
+
+    [HttpGet("payments/export")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<PaymentListItemDto>>>> ExportPayments(
+        [FromQuery] string? searchText,
+        [FromQuery] string? tab,
+        [FromQuery] int? companyId,
+        [FromQuery] int? invoiceId,
+        [FromQuery] int? sessionId,
+        [FromQuery] string? paymentMode,
+        [FromQuery] string? paymentType,
+        [FromQuery] DateTime? dateFrom,
+        [FromQuery] DateTime? dateTo,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new PaymentListQueryRequest
+        {
+            SearchText = searchText,
+            Tab = tab,
+            CompanyId = companyId,
+            InvoiceId = invoiceId,
+            SessionId = sessionId,
+            PaymentMode = paymentMode,
+            PaymentType = paymentType,
+            DateFrom = dateFrom,
+            DateTo = dateTo,
+            SortBy = sortBy,
+            SortDirection = sortDirection,
+            Page = 1,
+            PageSize = 5000
+        };
+
+        var data = await service.ExportPaymentsAsync(request, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<PaymentListItemDto>>.Ok(data));
+    }
+
+    [HttpGet("payments/{paymentId:int}")]
+    public async Task<ActionResult<ApiResponse<PaymentListItemDto>>> GetPayment(int paymentId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.GetPaymentByIdAsync(paymentId, cancellationToken);
+            return Ok(ApiResponse<PaymentListItemDto>.Ok(data));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return NotFound(ApiResponse<PaymentListItemDto>.Fail(ex.Message));
+        }
+    }
+
+    [HttpPost("payments/collect")]
+    public async Task<ActionResult<ApiResponse<PaymentResultDto>>> CollectPaymentFromPayments([FromBody] CollectPaymentRequest request, CancellationToken cancellationToken)
+    {
+        return await CollectPayment(request, cancellationToken);
+    }
+
+    [HttpGet("vehicles/barcodes")]
+    public async Task<ActionResult<ApiResponse<PagedVehicleBarcodeResultDto>>> GetVehicleBarcodes(
+        [FromQuery] string? searchText,
+        [FromQuery] string? tab,
+        [FromQuery] int? companyId,
+        [FromQuery] string? status,
+        [FromQuery] string? barcodeStatus,
+        [FromQuery] string? vehicleType,
+        [FromQuery] DateTime? entryFrom,
+        [FromQuery] DateTime? entryTo,
+        [FromQuery] DateTime? exitFrom,
+        [FromQuery] DateTime? exitTo,
+        [FromQuery] DateTime? createdFrom,
+        [FromQuery] DateTime? createdTo,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 25,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new VehicleBarcodeListQueryRequest
+        {
+            SearchText = searchText,
+            Tab = tab,
+            CompanyId = companyId,
+            Status = status,
+            BarcodeStatus = barcodeStatus,
+            VehicleType = vehicleType,
+            EntryFrom = entryFrom,
+            EntryTo = entryTo,
+            ExitFrom = exitFrom,
+            ExitTo = exitTo,
+            CreatedFrom = createdFrom,
+            CreatedTo = createdTo,
+            SortBy = sortBy,
+            SortDirection = sortDirection,
+            Page = page,
+            PageSize = pageSize
+        };
+
+        var data = await service.GetVehicleBarcodesAsync(request, cancellationToken);
+        return Ok(ApiResponse<PagedVehicleBarcodeResultDto>.Ok(data));
+    }
+
+    [HttpGet("vehicles/barcodes/export")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<VehicleBarcodeListItemDto>>>> ExportVehicleBarcodes(
+        [FromQuery] string? searchText,
+        [FromQuery] string? tab,
+        [FromQuery] int? companyId,
+        [FromQuery] string? status,
+        [FromQuery] string? barcodeStatus,
+        [FromQuery] string? vehicleType,
+        [FromQuery] DateTime? entryFrom,
+        [FromQuery] DateTime? entryTo,
+        [FromQuery] DateTime? exitFrom,
+        [FromQuery] DateTime? exitTo,
+        [FromQuery] DateTime? createdFrom,
+        [FromQuery] DateTime? createdTo,
+        [FromQuery] string? sortBy,
+        [FromQuery] string? sortDirection,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new VehicleBarcodeListQueryRequest
+        {
+            SearchText = searchText,
+            Tab = tab,
+            CompanyId = companyId,
+            Status = status,
+            BarcodeStatus = barcodeStatus,
+            VehicleType = vehicleType,
+            EntryFrom = entryFrom,
+            EntryTo = entryTo,
+            ExitFrom = exitFrom,
+            ExitTo = exitTo,
+            CreatedFrom = createdFrom,
+            CreatedTo = createdTo,
+            SortBy = sortBy,
+            SortDirection = sortDirection,
+            Page = 1,
+            PageSize = 5000
+        };
+
+        var data = await service.ExportVehicleBarcodesAsync(request, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<VehicleBarcodeListItemDto>>.Ok(data));
+    }
+
+    [HttpGet("vehicles/barcodes/{sessionId:int}")]
+    public async Task<ActionResult<ApiResponse<VehicleBarcodeDetailDto>>> GetVehicleBarcode(int sessionId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.GetVehicleBarcodeDetailAsync(sessionId, cancellationToken);
+            return Ok(ApiResponse<VehicleBarcodeDetailDto>.Ok(data));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return NotFound(ApiResponse<VehicleBarcodeDetailDto>.Fail(ex.Message));
+        }
+    }
+
+    [HttpPost("vehicles/barcodes/{sessionId:int}/mark-invalid")]
+    public async Task<ActionResult<ApiResponse<VehicleBarcodeDetailDto>>> MarkVehicleBarcodeInvalid(int sessionId, [FromBody] MarkBarcodeInvalidRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.MarkVehicleBarcodeInvalidAsync(sessionId, request, cancellationToken);
+            return Ok(ApiResponse<VehicleBarcodeDetailDto>.Ok(data, "Barcode marked invalid."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ApiResponse<VehicleBarcodeDetailDto>.Fail(ex.Message));
+        }
+    }
+
     [HttpGet("outside-display/latest")]
     public async Task<ActionResult<ApiResponse<OutsideDisplayDto?>>> GetLatestOutsideDisplay(CancellationToken cancellationToken)
     {

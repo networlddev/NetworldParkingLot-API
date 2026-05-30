@@ -211,8 +211,130 @@ public sealed record LiveParkingDto(
     DateTime EntryTime,
     string DurationInside,
     DateTime? ValidUntil,
+    string Status);
+
+
+
+public sealed record LiveParkingListItemDto(
+    int SessionId,
+    string BarcodeNo,
+    int CompanyId,
+    string CompanyCode,
+    string CompanyName,
+    string? PlateNo,
+    string VehicleType,
+    string? DriverName,
+    string? DriverMobile,
+    DateTime? EntryTime,
+    string DurationInside,
+    DateTime? ValidUntil,
+    int OverstayDays,
+    decimal OverstayAmount,
+    string PaymentStatus,
     string Status,
-    decimal PendingAmount);
+    string BarcodeStatus,
+    int? EntryOperatorId,
+    string? Remarks);
+
+public sealed record PagedLiveParkingResultDto(
+    IReadOnlyList<LiveParkingListItemDto> Items,
+    int Page,
+    int PageSize,
+    int TotalCount,
+    int TotalPages,
+    int InsideCount,
+    int OverstayCount,
+    int PaymentDueCount,
+    int GeneratedCount,
+    int ExitedCount);
+
+public sealed record PaymentListItemDto(
+    int PaymentId,
+    string ReceiptNo,
+    int CompanyId,
+    string CompanyCode,
+    string CompanyName,
+    int? InvoiceId,
+    string? InvoiceNo,
+    int? SessionId,
+    string? BarcodeNo,
+    string PaymentType,
+    decimal Amount,
+    string PaymentMode,
+    string? ReferenceNo,
+    DateTime PaymentDate,
+    string? Remarks,
+    int ReceivedBy);
+
+public sealed record PagedPaymentResultDto(
+    IReadOnlyList<PaymentListItemDto> Items,
+    int Page,
+    int PageSize,
+    int TotalCount,
+    int TotalPages,
+    decimal TotalAmount,
+    int CashCount,
+    int CardCount,
+    int BankCount,
+    int ChequeCount,
+    int OtherCount,
+    decimal CashAmount,
+    decimal CardAmount,
+    decimal BankAmount,
+    decimal ChequeAmount,
+    decimal OtherAmount);
+
+public sealed record VehicleBarcodeListItemDto(
+    int SessionId,
+    string BarcodeNo,
+    int CompanyId,
+    string CompanyCode,
+    string CompanyName,
+    string? PlateNo,
+    string VehicleType,
+    string? DriverName,
+    string? DriverMobile,
+    DateTime CreatedDate,
+    DateTime? EntryTime,
+    DateTime? ExitTime,
+    string Duration,
+    DateTime? ValidUntil,
+    string Status,
+    string BarcodeStatus,
+    int OverstayDays,
+    decimal OverstayAmount,
+    string PaymentStatus,
+    bool ForceExit,
+    string? ForceExitReason,
+    int CreatedBy,
+    int? EntryOperatorId,
+    int? ExitOperatorId,
+    string? Remarks);
+
+public sealed record PagedVehicleBarcodeResultDto(
+    IReadOnlyList<VehicleBarcodeListItemDto> Items,
+    int Page,
+    int PageSize,
+    int TotalCount,
+    int TotalPages,
+    int GeneratedCount,
+    int InsideCount,
+    int ExitedCount,
+    int InvalidCount,
+    int OverstayCount);
+
+public sealed record VehicleBarcodeHistoryDto(
+    DateTime Time,
+    string ActionType,
+    string Status,
+    string? Message,
+    int OperatorId);
+
+public sealed record VehicleBarcodeDetailDto(
+    VehicleBarcodeListItemDto Session,
+    IReadOnlyList<InvoiceListItemDto> Invoices,
+    IReadOnlyList<InvoicePaymentDto> Payments,
+    IReadOnlyList<VehicleBarcodeHistoryDto> History);
 
 public sealed record OutsideDisplayDto(
     long DisplayEventId,
