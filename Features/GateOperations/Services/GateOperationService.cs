@@ -18,6 +18,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         var now = DateTime.Now;
         var today = now.Date;
 
+        await ReassignInsideSessionsToActiveSubscriptionsAsync(null, 0, cancellationToken);
+
         var inside = await db.ParkingSessions.CountAsync(x => x.Status == ParkingConstants.SessionStatus.Inside, cancellationToken);
         var todayEntries = await db.ParkingSessions.CountAsync(x => x.EntryTime != null && x.EntryTime.Value.Date == today, cancellationToken);
         var todayExits = await db.ParkingSessions.CountAsync(x => x.ExitTime != null && x.ExitTime.Value.Date == today, cancellationToken);
@@ -392,6 +394,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             request.OperatorId,
             cancellationToken);
 
+        await ReassignInsideSessionsToActiveSubscriptionsAsync(company.CompanyId, request.OperatorId, cancellationToken);
+
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return await GetSubscriptionByIdAsync(subscription.SubscriptionId, cancellationToken);
@@ -399,6 +403,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
     public async Task<SubscriptionListItemDto> UpdateSubscriptionAsync(int subscriptionId, UpdateSubscriptionRequest request, CancellationToken cancellationToken = default)
     {
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+
         var subscription = await db.ParkingSubscriptions
             .Include(x => x.Company)
             .FirstOrDefaultAsync(x => x.SubscriptionId == subscriptionId, cancellationToken)
@@ -421,6 +427,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         var endDate = request.EndDate.HasValue && request.EndDate.Value.Date > startDate
             ? request.EndDate.Value.Date
             : CalculateExtraSlotEndDate(planType, startDate);
+        var normalizedStatus = NormalizeSubscriptionStatus(request.Status, startDate, endDate);
         var subTotal = request.SlotsPurchased * ratePerSlot;
         var total = subTotal - request.DiscountAmount + request.VatAmount;
         if (total < 0)
@@ -429,6 +436,14 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         var paid = invoice?.PaidAmount ?? subscription.PaidAmount;
         if (paid > total)
             throw new InvalidOperationException($"New total AED {total:n2} cannot be less than already paid AED {paid:n2}.");
+
+        await EnsureSubscriptionEditKeepsInsideVehiclesCoveredAsync(
+            subscription,
+            request.SlotsPurchased,
+            startDate,
+            endDate,
+            normalizedStatus,
+            cancellationToken);
 
         subscription.PlanType = planType;
         subscription.SlotsPurchased = request.SlotsPurchased;
@@ -441,7 +456,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         subscription.PaidAmount = paid;
         subscription.BalanceAmount = total - paid;
         subscription.IsExtraSlot = request.IsExtraSlot;
-        subscription.Status = NormalizeSubscriptionStatus(request.Status, startDate, endDate);
+        subscription.Status = normalizedStatus;
         subscription.Remarks = TrimOrNull(request.Remarks);
         subscription.ModifiedBy = request.OperatorId;
         subscription.ModifiedDate = DateTime.Now;
@@ -464,6 +479,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
         await AddActivityAsync("SubscriptionUpdated", subscription.CompanyId, null, null, null, "Subscription Updated", $"Subscription {subscription.SubscriptionId} updated.", request.OperatorId, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
+        await ReassignInsideSessionsToActiveSubscriptionsAsync(subscription.CompanyId, request.OperatorId, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return await GetSubscriptionByIdAsync(subscription.SubscriptionId, cancellationToken);
     }
 
@@ -813,6 +830,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (company == null)
             throw new InvalidOperationException("Company not found.");
 
+        await ReassignInsideSessionsToActiveSubscriptionsAsync(company.CompanyId, request.OperatorId, cancellationToken);
+
         var status = await BuildCompanyStatusAsync(company, request.OperatorId, cancellationToken);
         await AddActivityAsync(ParkingConstants.GateActionType.EntryCheck, company.CompanyId, null, null, null, status.EntryStatus, status.Message, request.OperatorId, cancellationToken);
         await repository.SaveChangesAsync(cancellationToken);
@@ -823,6 +842,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
     {
         var company = await repository.GetCompanyAsync(request.CompanyId, cancellationToken)
             ?? throw new InvalidOperationException("Company not found.");
+
+        await ReassignInsideSessionsToActiveSubscriptionsAsync(company.CompanyId, request.OperatorId, cancellationToken);
 
         var status = await BuildCompanyStatusAsync(company, request.OperatorId, cancellationToken);
         if (!status.CanGenerateBarcode && !(status.EntryStatus == "PaymentDue" && request.AllowPaymentDueWarning))
@@ -876,6 +897,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
         if (session.Status != ParkingConstants.SessionStatus.BarcodeGenerated || session.BarcodeStatus != ParkingConstants.BarcodeStatus.Generated)
             throw new InvalidOperationException("Only a generated barcode can be allowed for entry.");
+
+        await ReassignInsideSessionsToActiveSubscriptionsAsync(session.CompanyId, request.OperatorId, cancellationToken);
 
         var status = await BuildCompanyStatusAsync(session.Company, request.OperatorId, cancellationToken);
         if (!status.CanGenerateBarcode && !(status.EntryStatus == "PaymentDue" && request.AllowPaymentDueWarning))
@@ -1186,6 +1209,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         }
 
         await AddActivityAsync(ParkingConstants.GateActionType.ExtraSlotInvoice, company.CompanyId, null, null, null, "Extra Slot Invoice", $"Added {request.AdditionalSlots} {planType} extra slots.", request.OperatorId, cancellationToken);
+        await ReassignInsideSessionsToActiveSubscriptionsAsync(company.CompanyId, request.OperatorId, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
@@ -1472,6 +1496,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
     public async Task<IReadOnlyList<LiveParkingDto>> GetLiveParkingAsync(string? searchText = null, CancellationToken cancellationToken = default)
     {
+        await ReassignInsideSessionsToActiveSubscriptionsAsync(null, 0, cancellationToken);
+
         searchText = searchText?.Trim();
         var query = db.ParkingSessions
             .Include(x => x.Company)
@@ -1621,6 +1647,15 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
     public async Task<VehicleBarcodeDetailDto> GetVehicleBarcodeDetailAsync(int sessionId, CancellationToken cancellationToken = default)
     {
+        var companyId = await db.ParkingSessions
+            .AsNoTracking()
+            .Where(x => x.SessionId == sessionId)
+            .Select(x => (int?)x.CompanyId)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new InvalidOperationException("Vehicle/barcode record not found.");
+
+        await ReassignInsideSessionsToActiveSubscriptionsAsync(companyId, 0, cancellationToken);
+
         var session = await db.ParkingSessions
             .AsNoTracking()
             .Include(x => x.Company)
@@ -1990,6 +2025,257 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             message);
     }
 
+    private sealed record SubscriptionSlotSnapshot(
+        int SubscriptionId,
+        int CompanyId,
+        int SlotsPurchased,
+        DateTime StartDate,
+        DateTime EndDate,
+        string Status);
+
+    private async Task EnsureSubscriptionEditKeepsInsideVehiclesCoveredAsync(
+        ParkingSubscription currentSubscription,
+        int proposedSlotsPurchased,
+        DateTime proposedStartDate,
+        DateTime proposedEndDate,
+        string proposedStatus,
+        CancellationToken cancellationToken)
+    {
+        var insideSessions = await db.ParkingSessions
+            .AsNoTracking()
+            .Where(x => x.CompanyId == currentSubscription.CompanyId &&
+                        x.Status == ParkingConstants.SessionStatus.Inside)
+            .OrderBy(x => x.EntryTime ?? x.CreatedDate)
+            .ThenBy(x => x.SessionId)
+            .ToListAsync(cancellationToken);
+
+        if (insideSessions.Count == 0)
+            return;
+
+        var subscriptions = await db.ParkingSubscriptions
+            .AsNoTracking()
+            .Where(x => x.CompanyId == currentSubscription.CompanyId &&
+                        (x.Status != ParkingConstants.SubscriptionStatus.Cancelled || x.SubscriptionId == currentSubscription.SubscriptionId))
+            .Select(x => new SubscriptionSlotSnapshot(
+                x.SubscriptionId,
+                x.CompanyId,
+                x.SlotsPurchased,
+                x.StartDate,
+                x.EndDate,
+                x.Status))
+            .ToListAsync(cancellationToken);
+
+        var beforeCoveredSessionIds = GetCoveredInsideSessionIds(insideSessions, subscriptions, DateTime.Today);
+
+        var proposedSubscriptions = subscriptions
+            .Select(x => x.SubscriptionId == currentSubscription.SubscriptionId
+                ? x with
+                {
+                    SlotsPurchased = proposedSlotsPurchased,
+                    StartDate = proposedStartDate.Date,
+                    EndDate = proposedEndDate.Date,
+                    Status = proposedStatus
+                }
+                : x)
+            .ToList();
+
+        if (proposedSubscriptions.All(x => x.SubscriptionId != currentSubscription.SubscriptionId))
+        {
+            proposedSubscriptions.Add(new SubscriptionSlotSnapshot(
+                currentSubscription.SubscriptionId,
+                currentSubscription.CompanyId,
+                proposedSlotsPurchased,
+                proposedStartDate.Date,
+                proposedEndDate.Date,
+                proposedStatus));
+        }
+
+        var afterCoveredSessionIds = GetCoveredInsideSessionIds(insideSessions, proposedSubscriptions, DateTime.Today);
+        var newlyUncoveredCount = beforeCoveredSessionIds.Count(x => !afterCoveredSessionIds.Contains(x));
+        if (newlyUncoveredCount == 0)
+            return;
+
+        var vehiclesLinkedToEditedSubscription = insideSessions.Count(x => x.SubscriptionId == currentSubscription.SubscriptionId);
+        var beforeActiveSlots = CountActiveSubscriptionSlots(subscriptions, DateTime.Today);
+        var afterActiveSlots = CountActiveSubscriptionSlots(proposedSubscriptions, DateTime.Today);
+
+        throw new InvalidOperationException(
+            $"Cannot update this subscription because {newlyUncoveredCount} inside vehicle(s) would lose active slot coverage. " +
+            $"{vehiclesLinkedToEditedSubscription} inside vehicle(s) are currently linked to this subscription. " +
+            $"Active slots for this company would change from {beforeActiveSlots} to {afterActiveSlots}. " +
+            "Exit the vehicle(s), add enough active slots, or move them to another active subscription before changing the date, status, or slot count.");
+    }
+
+    private static HashSet<int> GetCoveredInsideSessionIds(
+        IReadOnlyList<ParkingSession> insideSessions,
+        IReadOnlyList<SubscriptionSlotSnapshot> subscriptions,
+        DateTime coverageDate)
+    {
+        var activeByCompany = subscriptions
+            .Where(x => IsSubscriptionActiveForSlotCoverage(x, coverageDate))
+            .OrderBy(x => x.CompanyId)
+            .ThenBy(x => x.EndDate)
+            .ThenBy(x => x.SubscriptionId)
+            .GroupBy(x => x.CompanyId)
+            .ToDictionary(x => x.Key, x => x.ToList());
+
+        var covered = new HashSet<int>();
+
+        foreach (var companySessions in insideSessions.GroupBy(x => x.CompanyId))
+        {
+            if (!activeByCompany.TryGetValue(companySessions.Key, out var companySubscriptions))
+                continue;
+
+            var remainingSlots = companySubscriptions.ToDictionary(x => x.SubscriptionId, x => Math.Max(x.SlotsPurchased, 0));
+            var sessionsNeedingCoverage = new List<ParkingSession>();
+
+            foreach (var session in companySessions.OrderBy(x => x.EntryTime ?? x.CreatedDate).ThenBy(x => x.SessionId))
+            {
+                if (session.SubscriptionId.HasValue &&
+                    remainingSlots.TryGetValue(session.SubscriptionId.Value, out var slotsLeft) &&
+                    slotsLeft > 0)
+                {
+                    remainingSlots[session.SubscriptionId.Value] = slotsLeft - 1;
+                    covered.Add(session.SessionId);
+                    continue;
+                }
+
+                sessionsNeedingCoverage.Add(session);
+            }
+
+            foreach (var session in sessionsNeedingCoverage)
+            {
+                var targetSubscription = companySubscriptions
+                    .FirstOrDefault(x => remainingSlots.TryGetValue(x.SubscriptionId, out var slotsLeft) && slotsLeft > 0);
+
+                if (targetSubscription == null)
+                    continue;
+
+                remainingSlots[targetSubscription.SubscriptionId]--;
+                covered.Add(session.SessionId);
+            }
+        }
+
+        return covered;
+    }
+
+    private static int CountActiveSubscriptionSlots(IReadOnlyList<SubscriptionSlotSnapshot> subscriptions, DateTime coverageDate)
+    {
+        return subscriptions
+            .Where(x => IsSubscriptionActiveForSlotCoverage(x, coverageDate))
+            .Sum(x => Math.Max(x.SlotsPurchased, 0));
+    }
+
+    private static bool IsSubscriptionActiveForSlotCoverage(SubscriptionSlotSnapshot subscription, DateTime coverageDate)
+    {
+        return subscription.Status.Equals(ParkingConstants.SubscriptionStatus.Active, StringComparison.OrdinalIgnoreCase) &&
+               subscription.StartDate.Date <= coverageDate.Date &&
+               subscription.EndDate.Date >= coverageDate.Date &&
+               subscription.SlotsPurchased > 0;
+    }
+
+    private async Task ReassignInsideSessionsToActiveSubscriptionsAsync(int? companyId, int operatorId, CancellationToken cancellationToken)
+    {
+        var today = DateTime.Today;
+        var insideQuery = db.ParkingSessions
+            .Include(x => x.Subscription)
+            .Where(x => x.Status == ParkingConstants.SessionStatus.Inside);
+
+        if (companyId.HasValue && companyId.Value > 0)
+            insideQuery = insideQuery.Where(x => x.CompanyId == companyId.Value);
+
+        var insideSessions = await insideQuery
+            .OrderBy(x => x.CompanyId)
+            .ThenBy(x => x.EntryTime ?? x.CreatedDate)
+            .ThenBy(x => x.SessionId)
+            .ToListAsync(cancellationToken);
+
+        if (insideSessions.Count == 0)
+            return;
+
+        var companyIds = insideSessions.Select(x => x.CompanyId).Distinct().ToList();
+        var activeSubscriptions = await db.ParkingSubscriptions
+            .Where(x => companyIds.Contains(x.CompanyId) &&
+                        x.Status == ParkingConstants.SubscriptionStatus.Active &&
+                        x.StartDate.Date <= today &&
+                        x.EndDate.Date >= today &&
+                        x.SlotsPurchased > 0)
+            .OrderBy(x => x.CompanyId)
+            .ThenBy(x => x.EndDate)
+            .ThenBy(x => x.SubscriptionId)
+            .ToListAsync(cancellationToken);
+
+        if (activeSubscriptions.Count == 0)
+            return;
+
+        var activeByCompany = activeSubscriptions
+            .GroupBy(x => x.CompanyId)
+            .ToDictionary(x => x.Key, x => x.ToList());
+
+        var changed = false;
+
+        foreach (var companySessions in insideSessions.GroupBy(x => x.CompanyId))
+        {
+            if (!activeByCompany.TryGetValue(companySessions.Key, out var companyActiveSubscriptions))
+                continue;
+
+            var remainingSlots = companyActiveSubscriptions.ToDictionary(x => x.SubscriptionId, x => Math.Max(x.SlotsPurchased, 0));
+            var sessionsNeedingCoverage = new List<ParkingSession>();
+
+            foreach (var session in companySessions.OrderBy(x => x.EntryTime ?? x.CreatedDate).ThenBy(x => x.SessionId))
+            {
+                if (session.SubscriptionId.HasValue &&
+                    remainingSlots.TryGetValue(session.SubscriptionId.Value, out var slotsLeft) &&
+                    slotsLeft > 0)
+                {
+                    remainingSlots[session.SubscriptionId.Value] = slotsLeft - 1;
+
+                    if (session.OverstayDays != 0 || session.OverstayAmount != 0)
+                    {
+                        session.OverstayDays = 0;
+                        session.OverstayAmount = 0;
+                        changed = true;
+                    }
+
+                    continue;
+                }
+
+                sessionsNeedingCoverage.Add(session);
+            }
+
+            foreach (var session in sessionsNeedingCoverage)
+            {
+                var targetSubscription = companyActiveSubscriptions
+                    .FirstOrDefault(x => remainingSlots.TryGetValue(x.SubscriptionId, out var slotsLeft) && slotsLeft > 0);
+
+                if (targetSubscription == null)
+                    continue;
+
+                var oldSubscriptionId = session.SubscriptionId;
+                session.SubscriptionId = targetSubscription.SubscriptionId;
+                session.Subscription = targetSubscription;
+                session.OverstayDays = 0;
+                session.OverstayAmount = 0;
+                remainingSlots[targetSubscription.SubscriptionId]--;
+                changed = true;
+
+                await AddActivityAsync(
+                    "SubscriptionAutoMoved",
+                    session.CompanyId,
+                    session.SessionId,
+                    session.BarcodeNo,
+                    session.PlateNo,
+                    "Subscription Reassigned",
+                    $"Inside vehicle moved from subscription #{oldSubscriptionId?.ToString() ?? "N/A"} to active subscription #{targetSubscription.SubscriptionId} because an active company slot was available.",
+                    operatorId,
+                    cancellationToken);
+            }
+        }
+
+        if (changed)
+            await repository.SaveChangesAsync(cancellationToken);
+    }
+
     private async Task<ExitScanResultDto> BuildExitScanResultAsync(string barcodeNo, int operatorId, bool saveDisplayEvent, CancellationToken cancellationToken)
     {
         var now = DateTime.Now;
@@ -2024,6 +2310,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             }
             return invalid;
         }
+
+        await ReassignInsideSessionsToActiveSubscriptionsAsync(session.CompanyId, operatorId, cancellationToken);
 
         var settings = await repository.GetSettingsAsync(cancellationToken);
         var overstayDailyCharge = GetDecimalSetting(settings, "OverstayDailyCharge", 50m);
@@ -2384,6 +2672,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
     private async Task<IReadOnlyList<LiveParkingListItemDto>> BuildLiveParkingListItemsAsync(LiveParkingListQueryRequest request, CancellationToken cancellationToken)
     {
+        await ReassignInsideSessionsToActiveSubscriptionsAsync(request.CompanyId, 0, cancellationToken);
+
         var query = db.ParkingSessions
             .AsNoTracking()
             .Include(x => x.Company)
@@ -2428,6 +2718,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
     private async Task<IReadOnlyList<VehicleBarcodeListItemDto>> BuildVehicleBarcodeListItemsAsync(VehicleBarcodeListQueryRequest request, CancellationToken cancellationToken)
     {
+        await ReassignInsideSessionsToActiveSubscriptionsAsync(request.CompanyId, 0, cancellationToken);
+
         var query = db.ParkingSessions
             .AsNoTracking()
             .Include(x => x.Company)
