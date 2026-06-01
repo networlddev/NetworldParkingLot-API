@@ -1,0 +1,454 @@
+diff -ruN baseline_backend/Features/GateOperations/Controllers/GateOperationsController.cs NetworldParkingLot.Api/Features/GateOperations/Controllers/GateOperationsController.cs
+--- baseline_backend/Features/GateOperations/Controllers/GateOperationsController.cs	2026-05-30 07:53:43.000000000 +0000
++++ NetworldParkingLot.Api/Features/GateOperations/Controllers/GateOperationsController.cs	2026-05-31 13:07:15.617933601 +0000
+@@ -1,14 +1,18 @@
++using Microsoft.AspNetCore.Authorization;
+ using Microsoft.AspNetCore.Mvc;
+ using NetworldParkingLot.Api.Common;
+ using NetworldParkingLot.Api.Features.GateOperations.Dtos;
+ using NetworldParkingLot.Api.Features.GateOperations.Services;
++using NetworldParkingLot.Api.Features.UserAccess.Filters;
+ 
+ namespace NetworldParkingLot.Api.Features.GateOperations.Controllers;
+ 
++[Authorize]
+ [ApiController]
+ [Route("api/gate-operation")]
+ public sealed class GateOperationsController(IGateOperationService service) : ControllerBase
+ {
++    [RequireParkingPermission("dashboard", "view")]
+     [HttpGet("summary")]
+     public async Task<ActionResult<ApiResponse<GateSummaryDto>>> GetSummary(CancellationToken cancellationToken)
+     {
+@@ -16,6 +20,7 @@
+         return Ok(ApiResponse<GateSummaryDto>.Ok(data));
+     }
+ 
++    [RequireParkingPermission("companies", "view")]
+     [HttpGet("companies/search")]
+     public async Task<ActionResult<ApiResponse<IReadOnlyList<CompanySearchDto>>>> SearchCompanies([FromQuery] string searchText, CancellationToken cancellationToken)
+     {
+@@ -23,6 +28,7 @@
+         return Ok(ApiResponse<IReadOnlyList<CompanySearchDto>>.Ok(data));
+     }
+ 
++    [RequireParkingPermission("companies", "view")]
+     [HttpGet("companies")]
+     public async Task<ActionResult<ApiResponse<PagedResultDto<CompanyListItemDto>>>> GetCompanies(
+         [FromQuery] string? searchText,
+@@ -57,6 +63,7 @@
+         return Ok(ApiResponse<PagedResultDto<CompanyListItemDto>>.Ok(data));
+     }
+ 
++    [RequireParkingPermission("companies", "export")]
+     [HttpGet("companies/export")]
+     public async Task<ActionResult<ApiResponse<IReadOnlyList<CompanyListItemDto>>>> ExportCompanies(
+         [FromQuery] string? searchText,
+@@ -87,6 +94,7 @@
+         return Ok(ApiResponse<IReadOnlyList<CompanyListItemDto>>.Ok(data));
+     }
+ 
++    [RequireParkingPermission("companies", "create")]
+     [HttpPost("companies")]
+     public async Task<ActionResult<ApiResponse<CompanyListItemDto>>> CreateCompany([FromBody] CreateCompanyWithSubscriptionRequest request, CancellationToken cancellationToken)
+     {
+@@ -101,6 +109,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("companies", "edit")]
+     [HttpPut("companies/{companyId:int}")]
+     public async Task<ActionResult<ApiResponse<CompanyListItemDto>>> UpdateCompany(int companyId, [FromBody] UpdateCompanyRequest request, CancellationToken cancellationToken)
+     {
+@@ -117,6 +126,7 @@
+ 
+ 
+ 
++    [RequireParkingPermission("subscriptions", "view")]
+     [HttpGet("subscriptions/rates")]
+     public async Task<ActionResult<ApiResponse<IReadOnlyList<ExtraSlotRateDto>>>> GetSubscriptionRates(CancellationToken cancellationToken)
+     {
+@@ -124,6 +134,7 @@
+         return Ok(ApiResponse<IReadOnlyList<ExtraSlotRateDto>>.Ok(data));
+     }
+ 
++    [RequireParkingPermission("subscriptions", "view")]
+     [HttpGet("subscriptions")]
+     public async Task<ActionResult<ApiResponse<PagedSubscriptionResultDto>>> GetSubscriptions(
+         [FromQuery] string? searchText,
+@@ -166,6 +177,7 @@
+         return Ok(ApiResponse<PagedSubscriptionResultDto>.Ok(data));
+     }
+ 
++    [RequireParkingPermission("subscriptions", "export")]
+     [HttpGet("subscriptions/export")]
+     public async Task<ActionResult<ApiResponse<IReadOnlyList<SubscriptionListItemDto>>>> ExportSubscriptions(
+         [FromQuery] string? searchText,
+@@ -206,6 +218,7 @@
+         return Ok(ApiResponse<IReadOnlyList<SubscriptionListItemDto>>.Ok(data));
+     }
+ 
++    [RequireParkingPermission("subscriptions", "view")]
+     [HttpGet("subscriptions/{subscriptionId:int}")]
+     public async Task<ActionResult<ApiResponse<SubscriptionListItemDto>>> GetSubscription(int subscriptionId, CancellationToken cancellationToken)
+     {
+@@ -220,6 +233,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("subscriptions", "create")]
+     [HttpPost("subscriptions")]
+     public async Task<ActionResult<ApiResponse<SubscriptionListItemDto>>> CreateSubscription([FromBody] CreateSubscriptionRequest request, CancellationToken cancellationToken)
+     {
+@@ -234,6 +248,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("subscriptions", "edit")]
+     [HttpPut("subscriptions/{subscriptionId:int}")]
+     public async Task<ActionResult<ApiResponse<SubscriptionListItemDto>>> UpdateSubscription(int subscriptionId, [FromBody] UpdateSubscriptionRequest request, CancellationToken cancellationToken)
+     {
+@@ -248,6 +263,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("subscriptions", "delete")]
+     [HttpPost("subscriptions/{subscriptionId:int}/cancel")]
+     public async Task<ActionResult<ApiResponse<SubscriptionListItemDto>>> CancelSubscription(int subscriptionId, [FromBody] CancelSubscriptionRequest request, CancellationToken cancellationToken)
+     {
+@@ -262,6 +278,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("subscriptions", "create")]
+     [HttpPost("subscriptions/{subscriptionId:int}/renew")]
+     public async Task<ActionResult<ApiResponse<SubscriptionListItemDto>>> RenewSubscription(int subscriptionId, [FromBody] RenewSubscriptionRequest request, CancellationToken cancellationToken)
+     {
+@@ -276,6 +293,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("gate_operation", "entry")]
+     [HttpPost("entry/check-company")]
+     public async Task<ActionResult<ApiResponse<CompanyGateStatusDto>>> CheckCompany([FromBody] CheckCompanyRequest request, CancellationToken cancellationToken)
+     {
+@@ -290,6 +308,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("gate_operation", "entry")]
+     [HttpPost("entry/generate-barcode")]
+     public async Task<ActionResult<ApiResponse<GenerateBarcodeResponseDto>>> GenerateBarcode([FromBody] GenerateBarcodeRequest request, CancellationToken cancellationToken)
+     {
+@@ -304,6 +323,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("gate_operation", "entry")]
+     [HttpPost("entry/allow")]
+     public async Task<ActionResult<ApiResponse<EntryResultDto>>> AllowEntry([FromBody] AllowEntryRequest request, CancellationToken cancellationToken)
+     {
+@@ -318,6 +338,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("gate_operation", "entry")]
+     [HttpPost("entry/reject")]
+     public async Task<ActionResult<ApiResponse<EntryResultDto>>> RejectEntry([FromBody] RejectEntryRequest request, CancellationToken cancellationToken)
+     {
+@@ -332,6 +353,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("gate_operation", "exit")]
+     [HttpPost("exit/scan")]
+     public async Task<ActionResult<ApiResponse<ExitScanResultDto>>> ScanExit([FromBody] ScanExitRequest request, CancellationToken cancellationToken)
+     {
+@@ -339,6 +361,7 @@
+         return Ok(ApiResponse<ExitScanResultDto>.Ok(data, data.Message));
+     }
+ 
++    [RequireParkingPermission("gate_operation", "exit")]
+     [HttpPost("exit/allow")]
+     public async Task<ActionResult<ApiResponse<ExitResultDto>>> AllowExit([FromBody] AllowExitRequest request, CancellationToken cancellationToken)
+     {
+@@ -353,6 +376,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("payments", "collect")]
+     [HttpPost("payment/collect")]
+     public async Task<ActionResult<ApiResponse<PaymentResultDto>>> CollectPayment([FromBody] CollectPaymentRequest request, CancellationToken cancellationToken)
+     {
+@@ -367,6 +391,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("gate_operation", "entry")]
+     [HttpGet("extra-slots/rates")]
+     public async Task<ActionResult<ApiResponse<IReadOnlyList<ExtraSlotRateDto>>>> GetExtraSlotRates(CancellationToken cancellationToken)
+     {
+@@ -374,6 +399,7 @@
+         return Ok(ApiResponse<IReadOnlyList<ExtraSlotRateDto>>.Ok(data));
+     }
+ 
++    [RequireParkingPermission("invoices", "create")]
+     [HttpPost("extra-slots/invoice")]
+     public async Task<ActionResult<ApiResponse<ExtraSlotInvoiceResultDto>>> CreateExtraSlotInvoice([FromBody] CreateExtraSlotInvoiceRequest request, CancellationToken cancellationToken)
+     {
+@@ -390,6 +416,7 @@
+ 
+ 
+ 
++    [RequireParkingPermission("invoices", "view")]
+     [HttpGet("invoices")]
+     public async Task<ActionResult<ApiResponse<PagedInvoiceResultDto>>> GetInvoices(
+         [FromQuery] string? searchText,
+@@ -428,6 +455,7 @@
+         return Ok(ApiResponse<PagedInvoiceResultDto>.Ok(data));
+     }
+ 
++    [RequireParkingPermission("invoices", "export")]
+     [HttpGet("invoices/export")]
+     public async Task<ActionResult<ApiResponse<IReadOnlyList<InvoiceListItemDto>>>> ExportInvoices(
+         [FromQuery] string? searchText,
+@@ -464,6 +492,7 @@
+         return Ok(ApiResponse<IReadOnlyList<InvoiceListItemDto>>.Ok(data));
+     }
+ 
++    [RequireParkingPermission("invoices", "view")]
+     [HttpGet("invoices/{invoiceId:int}")]
+     public async Task<ActionResult<ApiResponse<InvoiceListItemDto>>> GetInvoice(int invoiceId, CancellationToken cancellationToken)
+     {
+@@ -478,6 +507,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("invoices", "view")]
+     [HttpGet("invoices/{invoiceId:int}/payments")]
+     public async Task<ActionResult<ApiResponse<IReadOnlyList<InvoicePaymentDto>>>> GetInvoicePayments(int invoiceId, CancellationToken cancellationToken)
+     {
+@@ -492,6 +522,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("invoices", "create")]
+     [HttpPost("invoices")]
+     public async Task<ActionResult<ApiResponse<InvoiceListItemDto>>> CreateInvoice([FromBody] CreateInvoiceRequest request, CancellationToken cancellationToken)
+     {
+@@ -506,6 +537,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("invoices", "edit")]
+     [HttpPut("invoices/{invoiceId:int}")]
+     public async Task<ActionResult<ApiResponse<InvoiceListItemDto>>> UpdateInvoice(int invoiceId, [FromBody] UpdateInvoiceRequest request, CancellationToken cancellationToken)
+     {
+@@ -520,6 +552,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("invoices", "delete")]
+     [HttpPost("invoices/{invoiceId:int}/cancel")]
+     public async Task<ActionResult<ApiResponse<InvoiceListItemDto>>> CancelInvoice(int invoiceId, [FromBody] CancelInvoiceRequest request, CancellationToken cancellationToken)
+     {
+@@ -534,6 +567,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("invoices", "view")]
+     [HttpGet("invoices/company/{companyId:int}")]
+     public async Task<ActionResult<ApiResponse<IReadOnlyList<CompanyInvoiceDto>>>> GetCompanyInvoices(int companyId, CancellationToken cancellationToken)
+     {
+@@ -551,6 +585,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("dashboard", "view")]
+     [HttpGet("recent-activity")]
+     public async Task<ActionResult<ApiResponse<IReadOnlyList<RecentActivityDto>>>> GetRecentActivity([FromQuery] int take = 25, CancellationToken cancellationToken = default)
+     {
+@@ -558,6 +593,7 @@
+         return Ok(ApiResponse<IReadOnlyList<RecentActivityDto>>.Ok(data));
+     }
+ 
++    [RequireParkingPermission("live_parking", "view")]
+     [HttpGet("live-parking")]
+     public async Task<ActionResult<ApiResponse<IReadOnlyList<LiveParkingDto>>>> GetLiveParking([FromQuery] string? searchText = null, CancellationToken cancellationToken = default)
+     {
+@@ -567,6 +603,7 @@
+ 
+ 
+ 
++    [RequireParkingPermission("live_parking", "view")]
+     [HttpGet("live-parking/list")]
+     public async Task<ActionResult<ApiResponse<PagedLiveParkingResultDto>>> GetLiveParkingPaged(
+         [FromQuery] string? searchText,
+@@ -603,6 +640,7 @@
+         return Ok(ApiResponse<PagedLiveParkingResultDto>.Ok(data));
+     }
+ 
++    [RequireParkingPermission("live_parking", "export")]
+     [HttpGet("live-parking/export")]
+     public async Task<ActionResult<ApiResponse<IReadOnlyList<LiveParkingListItemDto>>>> ExportLiveParking(
+         [FromQuery] string? searchText,
+@@ -637,6 +675,7 @@
+         return Ok(ApiResponse<IReadOnlyList<LiveParkingListItemDto>>.Ok(data));
+     }
+ 
++    [RequireParkingPermission("live_parking", "view")]
+     [HttpGet("live-parking/{sessionId:int}")]
+     public async Task<ActionResult<ApiResponse<VehicleBarcodeDetailDto>>> GetLiveParkingDetail(int sessionId, CancellationToken cancellationToken)
+     {
+@@ -651,6 +690,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("gate_operation", "exit")]
+     [HttpPost("live-parking/{sessionId:int}/force-exit")]
+     public async Task<ActionResult<ApiResponse<ExitResultDto>>> ForceExitLiveParking(int sessionId, [FromBody] AllowExitRequest request, CancellationToken cancellationToken)
+     {
+@@ -667,6 +707,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("payments", "view")]
+     [HttpGet("payments")]
+     public async Task<ActionResult<ApiResponse<PagedPaymentResultDto>>> GetPayments(
+         [FromQuery] string? searchText,
+@@ -705,6 +746,7 @@
+         return Ok(ApiResponse<PagedPaymentResultDto>.Ok(data));
+     }
+ 
++    [RequireParkingPermission("payments", "export")]
+     [HttpGet("payments/export")]
+     public async Task<ActionResult<ApiResponse<IReadOnlyList<PaymentListItemDto>>>> ExportPayments(
+         [FromQuery] string? searchText,
+@@ -741,6 +783,7 @@
+         return Ok(ApiResponse<IReadOnlyList<PaymentListItemDto>>.Ok(data));
+     }
+ 
++    [RequireParkingPermission("payments", "view")]
+     [HttpGet("payments/{paymentId:int}")]
+     public async Task<ActionResult<ApiResponse<PaymentListItemDto>>> GetPayment(int paymentId, CancellationToken cancellationToken)
+     {
+@@ -755,12 +798,14 @@
+         }
+     }
+ 
++    [RequireParkingPermission("payments", "collect")]
+     [HttpPost("payments/collect")]
+     public async Task<ActionResult<ApiResponse<PaymentResultDto>>> CollectPaymentFromPayments([FromBody] CollectPaymentRequest request, CancellationToken cancellationToken)
+     {
+         return await CollectPayment(request, cancellationToken);
+     }
+ 
++    [RequireParkingPermission("vehicles", "view")]
+     [HttpGet("vehicles/barcodes")]
+     public async Task<ActionResult<ApiResponse<PagedVehicleBarcodeResultDto>>> GetVehicleBarcodes(
+         [FromQuery] string? searchText,
+@@ -805,6 +850,7 @@
+         return Ok(ApiResponse<PagedVehicleBarcodeResultDto>.Ok(data));
+     }
+ 
++    [RequireParkingPermission("vehicles", "export")]
+     [HttpGet("vehicles/barcodes/export")]
+     public async Task<ActionResult<ApiResponse<IReadOnlyList<VehicleBarcodeListItemDto>>>> ExportVehicleBarcodes(
+         [FromQuery] string? searchText,
+@@ -847,6 +893,7 @@
+         return Ok(ApiResponse<IReadOnlyList<VehicleBarcodeListItemDto>>.Ok(data));
+     }
+ 
++    [RequireParkingPermission("vehicles", "view")]
+     [HttpGet("vehicles/barcodes/{sessionId:int}")]
+     public async Task<ActionResult<ApiResponse<VehicleBarcodeDetailDto>>> GetVehicleBarcode(int sessionId, CancellationToken cancellationToken)
+     {
+@@ -861,6 +908,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("vehicles", "edit")]
+     [HttpPost("vehicles/barcodes/{sessionId:int}/mark-invalid")]
+     public async Task<ActionResult<ApiResponse<VehicleBarcodeDetailDto>>> MarkVehicleBarcodeInvalid(int sessionId, [FromBody] MarkBarcodeInvalidRequest request, CancellationToken cancellationToken)
+     {
+@@ -875,6 +923,7 @@
+         }
+     }
+ 
++    [AllowAnonymous]
+     [HttpGet("outside-display/latest")]
+     public async Task<ActionResult<ApiResponse<OutsideDisplayDto?>>> GetLatestOutsideDisplay(CancellationToken cancellationToken)
+     {
+@@ -882,6 +931,7 @@
+         return Ok(ApiResponse<OutsideDisplayDto?>.Ok(data));
+     }
+ 
++    [AllowAnonymous]
+     [HttpGet("outside-display/recent-scans")]
+ 
+     public async Task<ActionResult<ApiResponse<IReadOnlyList<OutsideDisplayDto>>>> GetRecentOutsideDisplayScans(
+diff -ruN baseline_backend/Features/GateOperations/Controllers/GatePrintController.cs NetworldParkingLot.Api/Features/GateOperations/Controllers/GatePrintController.cs
+--- baseline_backend/Features/GateOperations/Controllers/GatePrintController.cs	2026-05-24 09:22:33.000000000 +0000
++++ NetworldParkingLot.Api/Features/GateOperations/Controllers/GatePrintController.cs	2026-05-31 13:07:15.618673876 +0000
+@@ -1,17 +1,21 @@
++using Microsoft.AspNetCore.Authorization;
+ using Microsoft.AspNetCore.Mvc;
+ using Microsoft.EntityFrameworkCore;
+ using NetworldParkingLot.Api.Common;
+ using NetworldParkingLot.Api.Common.Printing;
+ using NetworldParkingLot.Api.Data;
+ using NetworldParkingLot.Api.Features.GateOperations.Dtos;
++using NetworldParkingLot.Api.Features.UserAccess.Filters;
+ using NetworldParkingLot.Api.Infrastructure.Printing;
+ 
+ namespace NetworldParkingLot.Api.Features.GateOperations.Controllers;
+ 
++[Authorize]
+ [ApiController]
+ [Route("api/gate-operation/print")]
+ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRawPrinterService printer) : ControllerBase
+ {
++    [RequireParkingPermission("gate_operation", "print")]
+     [HttpGet("barcode-image/{barcodeNo}")]
+     public async Task<ActionResult<ApiResponse<BarcodeImagePrintDto>>> GetBarcodeImage(
+         string barcodeNo,
+@@ -78,6 +82,7 @@
+ 
+     // NEW: QZ Tray endpoint. Flutter Web will call this endpoint, receive the raw printer command,
+     // and send it to QZ Tray on the gate PC. This avoids Chrome label preview/cropping issues.
++    [RequireParkingPermission("gate_operation", "print")]
+     [HttpGet("barcode-command/{barcodeNo}")]
+     public async Task<ActionResult<ApiResponse<BarcodeCommandPrintDto>>> GetBarcodeCommand(
+         string barcodeNo,
+@@ -133,6 +138,7 @@
+         return Ok(ApiResponse<BarcodeCommandPrintDto>.Ok(dto, "Barcode print command generated."));
+     }
+ 
++    [RequireParkingPermission("gate_operation", "print")]
+     [HttpGet("defaults")]
+     public async Task<ActionResult<ApiResponse<PrinterListDto>>> GetPrintDefaults(CancellationToken cancellationToken)
+     {
+@@ -151,6 +157,7 @@
+ 
+     // Existing server-side Windows printing endpoint. Keep it only if your API is running on the same PC as the printer.
+     // For hosted IIS + client-side printer, use barcode-command + QZ Tray instead.
++    [RequireParkingPermission("gate_operation", "print")]
+     [HttpPost("barcode")]
+     public async Task<ActionResult<ApiResponse<PrintJobResultDto>>> PrintBarcode([FromBody] PrintBarcodeRequest request, CancellationToken cancellationToken)
+     {
+@@ -183,6 +190,7 @@
+         }
+     }
+ 
++    [RequireParkingPermission("invoices", "print")]
+     [HttpGet("invoice-command")]
+     public async Task<ActionResult<ApiResponse<InvoiceCommandPrintDto>>> GetInvoiceCommand(
+         [FromQuery] int? invoiceId,
+@@ -226,6 +234,7 @@
+         return Ok(ApiResponse<InvoiceCommandPrintDto>.Ok(dto, "Invoice print command generated."));
+     }
+ 
++    [RequireParkingPermission("invoices", "print")]
+     [HttpPost("invoice")]
+     public async Task<ActionResult<ApiResponse<PrintJobResultDto>>> PrintInvoice([FromBody] PrintInvoiceRequest request, CancellationToken cancellationToken)
+     {

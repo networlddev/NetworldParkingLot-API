@@ -6,6 +6,12 @@ namespace NetworldParkingLot.Api.Data;
 public sealed class NetworldParkingDbContext(DbContextOptions<NetworldParkingDbContext> options) : DbContext(options)
 {
     public DbSet<AppUser> AppUsers => Set<AppUser>();
+    public DbSet<AppRole> AppRoles => Set<AppRole>();
+    public DbSet<AppModule> AppModules => Set<AppModule>();
+    public DbSet<AppModuleAction> AppModuleActions => Set<AppModuleAction>();
+    public DbSet<AppUserRole> AppUserRoles => Set<AppUserRole>();
+    public DbSet<AppRolePermission> AppRolePermissions => Set<AppRolePermission>();
+    public DbSet<AppUserPermission> AppUserPermissions => Set<AppUserPermission>();
     public DbSet<ParkingCompany> ParkingCompanies => Set<ParkingCompany>();
     public DbSet<ParkingSubscription> ParkingSubscriptions => Set<ParkingSubscription>();
     public DbSet<ParkingInvoice> ParkingInvoices => Set<ParkingInvoice>();
@@ -20,6 +26,54 @@ public sealed class NetworldParkingDbContext(DbContextOptions<NetworldParkingDbC
     {
         modelBuilder.Entity<AppUser>().HasKey(x => x.UserId);
         modelBuilder.Entity<AppUser>().HasIndex(x => x.Username).IsUnique();
+        modelBuilder.Entity<AppUser>().Property(x => x.Status).HasDefaultValue("Active");
+
+        modelBuilder.Entity<AppRole>().HasKey(x => x.RoleId);
+        modelBuilder.Entity<AppRole>().HasIndex(x => x.RoleKey).IsUnique();
+
+        modelBuilder.Entity<AppModule>().HasKey(x => x.ModuleId);
+        modelBuilder.Entity<AppModule>().HasIndex(x => x.ModuleKey).IsUnique();
+
+        modelBuilder.Entity<AppModuleAction>().HasKey(x => x.ActionId);
+        modelBuilder.Entity<AppModuleAction>().HasIndex(x => new { x.ModuleId, x.ActionKey }).IsUnique();
+        modelBuilder.Entity<AppModuleAction>()
+            .HasOne(x => x.Module)
+            .WithMany(x => x.Actions)
+            .HasForeignKey(x => x.ModuleId);
+
+        modelBuilder.Entity<AppUserRole>().HasKey(x => new { x.UserId, x.RoleId });
+        modelBuilder.Entity<AppUserRole>()
+            .HasOne(x => x.User)
+            .WithMany(x => x.UserRoles)
+            .HasForeignKey(x => x.UserId);
+        modelBuilder.Entity<AppUserRole>()
+            .HasOne(x => x.Role)
+            .WithMany(x => x.UserRoles)
+            .HasForeignKey(x => x.RoleId);
+
+        modelBuilder.Entity<AppRolePermission>().HasKey(x => new { x.RoleId, x.ModuleId, x.ActionKey });
+        modelBuilder.Entity<AppRolePermission>()
+            .HasOne(x => x.Role)
+            .WithMany(x => x.Permissions)
+            .HasForeignKey(x => x.RoleId);
+        modelBuilder.Entity<AppRolePermission>()
+            .HasOne(x => x.Module)
+            .WithMany()
+            .HasForeignKey(x => x.ModuleId);
+
+        modelBuilder.Entity<AppUserPermission>().HasKey(x => new { x.UserId, x.ModuleId, x.ActionId });
+        modelBuilder.Entity<AppUserPermission>()
+            .HasOne(x => x.User)
+            .WithMany(x => x.UserPermissions)
+            .HasForeignKey(x => x.UserId);
+        modelBuilder.Entity<AppUserPermission>()
+            .HasOne(x => x.Module)
+            .WithMany()
+            .HasForeignKey(x => x.ModuleId);
+        modelBuilder.Entity<AppUserPermission>()
+            .HasOne(x => x.Action)
+            .WithMany()
+            .HasForeignKey(x => x.ActionId);
 
         modelBuilder.Entity<ParkingCompany>().HasKey(x => x.CompanyId);
         modelBuilder.Entity<ParkingCompany>().HasIndex(x => x.CompanyCode).IsUnique();

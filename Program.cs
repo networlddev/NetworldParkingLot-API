@@ -1,13 +1,43 @@
+using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using NetworldParkingLot.Api.Common;
 using NetworldParkingLot.Api.Data;
 using NetworldParkingLot.Api.Features.GateOperations.Repositories;
 using NetworldParkingLot.Api.Features.GateOperations.Services;
 using NetworldParkingLot.Api.Infrastructure.Printing;
+using NetworldParkingLot.Api.Common.Security;
+using NetworldParkingLot.Api.Features.UserAccess.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
+
+var jwtKey = builder.Configuration["Jwt:Key"];
+if (string.IsNullOrWhiteSpace(jwtKey) || jwtKey.Length < 32)
+{
+    jwtKey = "NetworldParkingLot_Default_Development_Key_Change_This_Immediately";
+}
+var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "NetworldParkingLot";
+var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "NetworldParkingLotClient";
+
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateIssuerSigningKey = true,
+            ValidateLifetime = true,
+            ValidIssuer = jwtIssuer,
+            ValidAudience = jwtAudience,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
+            ClockSkew = TimeSpan.FromMinutes(2)
+        };
+    });
 
 builder.Services.AddCors(options =>
 {
@@ -36,6 +66,8 @@ builder.Services.AddDbContext<NetworldParkingDbContext>(options =>
 builder.Services.AddScoped<IGateRepository, GateRepository>();
 builder.Services.AddScoped<IGateOperationService, GateOperationService>();
 builder.Services.AddScoped<IWindowsRawPrinterService, WindowsRawPrinterService>();
+builder.Services.AddScoped<JwtTokenService>();
+builder.Services.AddScoped<IUserAccessService, UserAccessService>();
 
 var app = builder.Build();
 
@@ -54,6 +86,7 @@ app.MapGet("/", context =>
 // app.UseHttpsRedirection();
 
 app.UseCors("FlutterWebCors");
+app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 app.Run();

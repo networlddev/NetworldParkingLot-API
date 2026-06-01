@@ -1,17 +1,21 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using NetworldParkingLot.Api.Common;
 using NetworldParkingLot.Api.Common.Printing;
 using NetworldParkingLot.Api.Data;
 using NetworldParkingLot.Api.Features.GateOperations.Dtos;
+using NetworldParkingLot.Api.Features.UserAccess.Filters;
 using NetworldParkingLot.Api.Infrastructure.Printing;
 
 namespace NetworldParkingLot.Api.Features.GateOperations.Controllers;
 
+[Authorize]
 [ApiController]
 [Route("api/gate-operation/print")]
 public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRawPrinterService printer) : ControllerBase
 {
+    [RequireParkingPermission("gate_operation", "print")]
     [HttpGet("barcode-image/{barcodeNo}")]
     public async Task<ActionResult<ApiResponse<BarcodeImagePrintDto>>> GetBarcodeImage(
         string barcodeNo,
@@ -78,6 +82,7 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
 
     // NEW: QZ Tray endpoint. Flutter Web will call this endpoint, receive the raw printer command,
     // and send it to QZ Tray on the gate PC. This avoids Chrome label preview/cropping issues.
+    [RequireParkingPermission("gate_operation", "print")]
     [HttpGet("barcode-command/{barcodeNo}")]
     public async Task<ActionResult<ApiResponse<BarcodeCommandPrintDto>>> GetBarcodeCommand(
         string barcodeNo,
@@ -133,6 +138,7 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         return Ok(ApiResponse<BarcodeCommandPrintDto>.Ok(dto, "Barcode print command generated."));
     }
 
+    [RequireParkingPermission("gate_operation", "print")]
     [HttpGet("defaults")]
     public async Task<ActionResult<ApiResponse<PrinterListDto>>> GetPrintDefaults(CancellationToken cancellationToken)
     {
@@ -151,6 +157,7 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
 
     // Existing server-side Windows printing endpoint. Keep it only if your API is running on the same PC as the printer.
     // For hosted IIS + client-side printer, use barcode-command + QZ Tray instead.
+    [RequireParkingPermission("gate_operation", "print")]
     [HttpPost("barcode")]
     public async Task<ActionResult<ApiResponse<PrintJobResultDto>>> PrintBarcode([FromBody] PrintBarcodeRequest request, CancellationToken cancellationToken)
     {
@@ -183,6 +190,7 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         }
     }
 
+    [RequireParkingPermission("invoices", "print")]
     [HttpGet("invoice-command")]
     public async Task<ActionResult<ApiResponse<InvoiceCommandPrintDto>>> GetInvoiceCommand(
         [FromQuery] int? invoiceId,
@@ -226,6 +234,7 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         return Ok(ApiResponse<InvoiceCommandPrintDto>.Ok(dto, "Invoice print command generated."));
     }
 
+    [RequireParkingPermission("invoices", "print")]
     [HttpPost("invoice")]
     public async Task<ActionResult<ApiResponse<PrintJobResultDto>>> PrintInvoice([FromBody] PrintInvoiceRequest request, CancellationToken cancellationToken)
     {
