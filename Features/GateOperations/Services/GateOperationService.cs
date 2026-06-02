@@ -849,6 +849,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (!status.CanGenerateBarcode && !(status.EntryStatus == "PaymentDue" && request.AllowPaymentDueWarning))
             throw new InvalidOperationException(status.Message);
 
+        await EnsureParkingCapacityAvailableAsync(cancellationToken);
+
         var plateNo = string.IsNullOrWhiteSpace(request.PlateNo)
             ? null
             : request.PlateNo.Trim().ToUpperInvariant();
@@ -903,6 +905,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         var status = await BuildCompanyStatusAsync(session.Company, request.OperatorId, cancellationToken);
         if (!status.CanGenerateBarcode && !(status.EntryStatus == "PaymentDue" && request.AllowPaymentDueWarning))
             throw new InvalidOperationException(status.Message);
+
+        await EnsureParkingCapacityAvailableAsync(cancellationToken);
 
         session.EntryTime = DateTime.Now;
         session.Status = ParkingConstants.SessionStatus.Inside;
@@ -1960,6 +1964,11 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         var subscription = await repository.GetBestActiveSubscriptionAsync(company.CompanyId, cancellationToken);
         var settings = await repository.GetSettingsAsync(cancellationToken);
         var blockPaymentDue = GetBoolSetting(settings, "BlockEntryIfPaymentDue", false);
+        var blockWhenFull = GetBoolSetting(settings, "BlockEntryWhenParkingFull", true);
+        var totalCapacity = GetIntSetting(settings, "TotalParkingCapacity", 500);
+        var totalInside = blockWhenFull
+            ? await db.ParkingSessions.CountAsync(x => x.Status == ParkingConstants.SessionStatus.Inside, cancellationToken)
+            : 0;
 
         var available = Math.Max(slots - inside, 0);
         var paymentStatus = pending <= 0 ? ParkingConstants.PaymentStatus.Paid : ParkingConstants.PaymentStatus.Unpaid;
@@ -1979,6 +1988,12 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             entryStatus = "SubscriptionExpired";
             canGenerate = false;
             message = "No active subscription found. Create or renew subscription.";
+        }
+        else if (blockWhenFull && totalInside >= totalCapacity)
+        {
+            entryStatus = "ParkingFull";
+            canGenerate = false;
+            message = $"Parking capacity is full ({totalInside}/{totalCapacity}). Allow exit or increase parking capacity in settings.";
         }
         else if (available <= 0)
         {
@@ -2439,9 +2454,23 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         invoice.Status = GetInvoiceStatus(invoice.BalanceAmount, invoice.PaidAmount);
     }
 
+    private async Task EnsureParkingCapacityAvailableAsync(CancellationToken cancellationToken)
+    {
+        var settings = await repository.GetSettingsAsync(cancellationToken);
+        if (!GetBoolSetting(settings, "BlockEntryWhenParkingFull", true))
+            return;
+
+        var totalCapacity = GetIntSetting(settings, "TotalParkingCapacity", 500);
+        var inside = await db.ParkingSessions.CountAsync(x => x.Status == ParkingConstants.SessionStatus.Inside, cancellationToken);
+        if (inside >= totalCapacity)
+            throw new InvalidOperationException($"Parking capacity is full ({inside}/{totalCapacity}). Allow exit or increase parking capacity in settings.");
+    }
+
     private async Task<string> GenerateNextBarcodeNoAsync(CancellationToken cancellationToken)
     {
-        var key = "BARCODE_" + DateTime.Now.ToString("yyyyMMdd");
+        var settings = await repository.GetSettingsAsync(cancellationToken);
+        var prefix = NormalizeCounterPrefix(GetStringSetting(settings, "BarcodePrefix", "KP"), "KP");
+        var key = "BARCODE_" + prefix + "_" + DateTime.Now.ToString("yyyyMMdd");
         var counter = await db.SystemCounters.FirstOrDefaultAsync(x => x.CounterName == key, cancellationToken);
         if (counter == null)
         {
@@ -2451,12 +2480,24 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         counter.LastNumber += 1;
         counter.UpdatedDate = DateTime.Now;
         await db.SaveChangesAsync(cancellationToken);
-        return "KP" + DateTime.Now.ToString("yyMMdd") + counter.LastNumber.ToString("D6");
+        return prefix + DateTime.Now.ToString("yyMMdd") + counter.LastNumber.ToString("D6");
     }
 
     private async Task<string> GenerateNextCompanyCodeAsync(CancellationToken cancellationToken) => await GenerateFromCounterAsync("CMP", "CMP", cancellationToken);
-    private async Task<string> GenerateNextInvoiceNoAsync(CancellationToken cancellationToken) => await GenerateFromCounterAsync("INV", "INV", cancellationToken);
-    private async Task<string> GenerateNextReceiptNoAsync(CancellationToken cancellationToken) => await GenerateFromCounterAsync("RCPT", "RCT", cancellationToken);
+
+    private async Task<string> GenerateNextInvoiceNoAsync(CancellationToken cancellationToken)
+    {
+        var settings = await repository.GetSettingsAsync(cancellationToken);
+        var prefix = NormalizeCounterPrefix(GetStringSetting(settings, "InvoicePrefix", "INV"), "INV");
+        return await GenerateFromCounterAsync(prefix, prefix, cancellationToken);
+    }
+
+    private async Task<string> GenerateNextReceiptNoAsync(CancellationToken cancellationToken)
+    {
+        var settings = await repository.GetSettingsAsync(cancellationToken);
+        var prefix = NormalizeCounterPrefix(GetStringSetting(settings, "ReceiptPrefix", "RCT"), "RCT");
+        return await GenerateFromCounterAsync(prefix, prefix, cancellationToken);
+    }
 
     private async Task<string> GenerateFromCounterAsync(string prefix, string counterPrefix, CancellationToken cancellationToken)
     {
@@ -2491,6 +2532,11 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
     private async Task AddOutsideDisplayAsync(ParkingSession session, string displayStatus, string mainMessage, string? subMessage, decimal amountDue, int overstayDays, CancellationToken cancellationToken)
     {
+        var settings = await repository.GetSettingsAsync(cancellationToken);
+        if (!GetBoolSetting(settings, "OutsideDisplayEnabled", true))
+            return;
+
+        var resolvedMessages = ResolveOutsideDisplayMessages(settings, displayStatus, mainMessage, subMessage);
         await repository.AddOutsideDisplayEventAsync(new OutsideDisplayEvent
         {
             SessionId = session.SessionId,
@@ -2498,8 +2544,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             PlateNo = session.PlateNo,
             CompanyName = session.Company.CompanyName,
             DisplayStatus = displayStatus,
-            MainMessage = mainMessage,
-            SubMessage = subMessage,
+            MainMessage = resolvedMessages.MainMessage,
+            SubMessage = resolvedMessages.SubMessage,
             AmountDue = amountDue,
             OverstayDays = overstayDays,
             CreatedDate = DateTime.Now
@@ -2508,16 +2554,42 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
     private async Task AddInvalidDisplayAsync(string barcodeNo, string mainMessage, string subMessage, int operatorId, CancellationToken cancellationToken)
     {
-        await repository.AddOutsideDisplayEventAsync(new OutsideDisplayEvent
+        var settings = await repository.GetSettingsAsync(cancellationToken);
+        if (GetBoolSetting(settings, "OutsideDisplayEnabled", true))
         {
-            BarcodeNo = barcodeNo,
-            DisplayStatus = ParkingConstants.OutsideDisplayStatus.InvalidBarcode,
-            MainMessage = mainMessage,
-            SubMessage = subMessage,
-            CreatedDate = DateTime.Now
-        }, cancellationToken);
+            var resolvedMessages = ResolveOutsideDisplayMessages(settings, ParkingConstants.OutsideDisplayStatus.InvalidBarcode, mainMessage, subMessage);
+            await repository.AddOutsideDisplayEventAsync(new OutsideDisplayEvent
+            {
+                BarcodeNo = barcodeNo,
+                DisplayStatus = ParkingConstants.OutsideDisplayStatus.InvalidBarcode,
+                MainMessage = resolvedMessages.MainMessage,
+                SubMessage = resolvedMessages.SubMessage,
+                CreatedDate = DateTime.Now
+            }, cancellationToken);
+        }
+
         await AddActivityAsync(ParkingConstants.GateActionType.ExitScanned, null, null, barcodeNo, null, ParkingConstants.ExitStatus.InvalidBarcode, subMessage, operatorId, cancellationToken);
         await repository.SaveChangesAsync(cancellationToken);
+    }
+
+    private static (string MainMessage, string? SubMessage) ResolveOutsideDisplayMessages(Dictionary<string, string> settings, string displayStatus, string mainMessage, string? subMessage)
+    {
+        if (displayStatus.Equals(ParkingConstants.OutsideDisplayStatus.EntryAllowed, StringComparison.OrdinalIgnoreCase))
+            return (GetStringSetting(settings, "OutsideDisplayEntryAllowedMainMessage", mainMessage), GetStringSetting(settings, "OutsideDisplayEntryAllowedSubMessage", subMessage ?? string.Empty));
+
+        if (displayStatus.Equals(ParkingConstants.OutsideDisplayStatus.ClearToExit, StringComparison.OrdinalIgnoreCase))
+            return (GetStringSetting(settings, "OutsideDisplayClearToExitMainMessage", mainMessage), GetStringSetting(settings, "OutsideDisplayClearToExitSubMessage", subMessage ?? string.Empty));
+
+        if (displayStatus.Equals(ParkingConstants.OutsideDisplayStatus.PaymentRequired, StringComparison.OrdinalIgnoreCase))
+            return (GetStringSetting(settings, "OutsideDisplayPaymentRequiredMainMessage", mainMessage), GetStringSetting(settings, "OutsideDisplayPaymentRequiredSubMessage", subMessage ?? string.Empty));
+
+        if (displayStatus.Equals(ParkingConstants.OutsideDisplayStatus.OverstayDetected, StringComparison.OrdinalIgnoreCase))
+            return (GetStringSetting(settings, "OutsideDisplayOverstayMainMessage", mainMessage), GetStringSetting(settings, "OutsideDisplayOverstaySubMessage", subMessage ?? string.Empty));
+
+        if (displayStatus.Equals(ParkingConstants.OutsideDisplayStatus.InvalidBarcode, StringComparison.OrdinalIgnoreCase))
+            return (GetStringSetting(settings, "OutsideDisplayInvalidMainMessage", mainMessage), GetStringSetting(settings, "OutsideDisplayInvalidSubMessage", subMessage ?? string.Empty));
+
+        return (mainMessage, subMessage);
     }
 
     private static string FormatDuration(TimeSpan span)
@@ -3144,6 +3216,16 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (value.Equals(ParkingConstants.CompanyStatus.Blocked, StringComparison.OrdinalIgnoreCase)) return ParkingConstants.CompanyStatus.Blocked;
         if (value.Equals(ParkingConstants.CompanyStatus.Inactive, StringComparison.OrdinalIgnoreCase)) return ParkingConstants.CompanyStatus.Inactive;
         return ParkingConstants.CompanyStatus.Active;
+    }
+
+    private static string GetStringSetting(Dictionary<string, string> settings, string key, string defaultValue) =>
+        settings.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value.Trim() : defaultValue;
+
+    private static string NormalizeCounterPrefix(string? value, string fallback)
+    {
+        var clean = new string((value ?? string.Empty).Trim().ToUpperInvariant().Where(c => char.IsLetterOrDigit(c) || c == '-').ToArray());
+        if (clean.Length == 0) clean = fallback;
+        return clean.Length <= 12 ? clean : clean[..12];
     }
 
     private static int GetIntSetting(Dictionary<string, string> settings, string key, int defaultValue) =>

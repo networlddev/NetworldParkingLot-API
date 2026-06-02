@@ -7,12 +7,11 @@ public sealed class PrintBarcodeRequest
     public int? SessionId { get; set; }
     public string? BarcodeNo { get; set; }
 
-    [Required]
-    public string PrinterName { get; set; } = string.Empty;
+    public string? PrinterName { get; set; }
 
     // TSPL is common for TSC/Xprinter label printers. Use ZPL for Zebra.
-    public string PrinterLanguage { get; set; } = "TSPL";
-    public int Copies { get; set; } = 1;
+    public string? PrinterLanguage { get; set; }
+    public int Copies { get; set; } = 0;
 }
 
 public sealed class PrintInvoiceRequest
@@ -20,10 +19,9 @@ public sealed class PrintInvoiceRequest
     public int? InvoiceId { get; set; }
     public string? InvoiceNo { get; set; }
 
-    [Required]
-    public string PrinterName { get; set; } = string.Empty;
+    public string? PrinterName { get; set; }
 
-    public int Copies { get; set; } = 1;
+    public int Copies { get; set; } = 0;
 }
 
 public sealed record PrintJobResultDto(

@@ -9,6 +9,7 @@ using NetworldParkingLot.Api.Features.GateOperations.Services;
 using NetworldParkingLot.Api.Infrastructure.Printing;
 using NetworldParkingLot.Api.Common.Security;
 using NetworldParkingLot.Api.Features.UserAccess.Services;
+using NetworldParkingLot.Api.Features.Settings.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -68,6 +69,7 @@ builder.Services.AddScoped<IGateOperationService, GateOperationService>();
 builder.Services.AddScoped<IWindowsRawPrinterService, WindowsRawPrinterService>();
 builder.Services.AddScoped<JwtTokenService>();
 builder.Services.AddScoped<IUserAccessService, UserAccessService>();
+builder.Services.AddScoped<ISettingsService, SettingsService>();
 
 var app = builder.Build();
 

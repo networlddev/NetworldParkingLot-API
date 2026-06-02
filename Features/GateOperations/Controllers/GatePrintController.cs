@@ -53,12 +53,12 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
             : session.PlateNo.Trim().ToUpperInvariant();
 
         var pngBytes = BarcodeLabelImageGenerator.GenerateLabelPng(
-            projectName: "NETWORLD PARKING LOT",
+            projectName: ReadString(settings, "BarcodeLabelTitle", "NETWORLD PARKING LOT"),
             companyName: session.Company.CompanyName,
             vehicleReference: vehicleReference,
             barcodeNo: session.BarcodeNo,
             validUntil: validUntil,
-            note: "Valid for one parking session only",
+            note: ReadString(settings, "BarcodeLabelNote", "One parking session only"),
             widthMm: labelWidthMm,
             heightMm: labelHeightMm,
             dpi: labelDpi,
@@ -109,23 +109,18 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
             .AsNoTracking()
             .ToDictionaryAsync(x => x.SettingKey, x => x.SettingValue, cancellationToken);
 
-        var selectedLanguage = (language ?? ReadString(settings, "BarcodePrinterLanguage", "TSPL"))
-            .Trim()
-            .ToUpperInvariant();
-
-        if (selectedLanguage != "TSPL" && selectedLanguage != "ZPL")
-            selectedLanguage = "TSPL";
+        var selectedLanguage = NormalizePrinterLanguage(language ?? ReadString(settings, "BarcodePrinterLanguage", "TSPL"));
 
         var selectedPrinter = string.IsNullOrWhiteSpace(printerName)
             ? ReadString(settings, "BarcodePrinterName", string.Empty)
             : printerName.Trim();
 
-        var selectedCopies = Math.Clamp(copies ?? 1, 1, 5);
+        var selectedCopies = Math.Clamp(copies ?? ReadInt(settings, "BarcodePrintCopies", 1), 1, 5);
         var selectedDirection = Math.Clamp(direction ?? ReadInt(settings, "BarcodePrinterDirection", 1), 0, 1);
 
         var command = selectedLanguage == "ZPL"
-            ? BuildZplBarcodeLabel(session, selectedCopies)
-            : BuildTsplBarcodeLabel(session, selectedCopies);
+            ? BuildZplBarcodeLabel(session, selectedCopies, settings)
+            : BuildTsplBarcodeLabel(session, selectedCopies, settings, selectedDirection);
 
         var dto = new BarcodeCommandPrintDto
         {
@@ -173,15 +168,23 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
             if (session == null)
                 return BadRequest(ApiResponse<PrintJobResultDto>.Fail("Barcode record not found."));
 
-            var copies = Math.Clamp(request.Copies, 1, 5);
-            var language = string.IsNullOrWhiteSpace(request.PrinterLanguage) ? "TSPL" : request.PrinterLanguage.Trim().ToUpperInvariant();
+            var settings = await db.SystemSettings
+                .AsNoTracking()
+                .ToDictionaryAsync(x => x.SettingKey, x => x.SettingValue, cancellationToken);
+
+            var copies = Math.Clamp(request.Copies > 0 ? request.Copies : ReadInt(settings, "BarcodePrintCopies", 1), 1, 5);
+            var language = NormalizePrinterLanguage(request.PrinterLanguage ?? ReadString(settings, "BarcodePrinterLanguage", "TSPL"));
+            var selectedPrinter = string.IsNullOrWhiteSpace(request.PrinterName)
+                ? ReadString(settings, "BarcodePrinterName", string.Empty)
+                : request.PrinterName.Trim();
+            var direction = Math.Clamp(ReadInt(settings, "BarcodePrinterDirection", 1), 0, 1);
             var command = language == "ZPL"
-                ? BuildZplBarcodeLabel(session, copies)
-                : BuildTsplBarcodeLabel(session, copies);
+                ? BuildZplBarcodeLabel(session, copies, settings)
+                : BuildTsplBarcodeLabel(session, copies, settings, direction);
 
-            await printer.SendRawCommandAsync(request.PrinterName, $"Barcode-{session.BarcodeNo}", command, cancellationToken);
+            await printer.SendRawCommandAsync(selectedPrinter, $"Barcode-{session.BarcodeNo}", command, cancellationToken);
 
-            var result = new PrintJobResultDto(true, request.PrinterName, $"Barcode-{session.BarcodeNo}", "Barcode sent to printer.");
+            var result = new PrintJobResultDto(true, selectedPrinter, $"Barcode-{session.BarcodeNo}", "Barcode sent to printer.");
             return Ok(ApiResponse<PrintJobResultDto>.Ok(result, result.Message));
         }
         catch (InvalidOperationException ex)
@@ -222,7 +225,8 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
             ? ReadString(settings, "InvoicePrinterName", string.Empty)
             : printerName.Trim();
 
-        var command = BuildReceiptInvoice(invoice, Math.Clamp(copies ?? 1, 1, 5));
+        var selectedCopies = Math.Clamp(copies ?? ReadInt(settings, "InvoicePrintCopies", 1), 1, 5);
+        var command = BuildReceiptInvoice(invoice, selectedCopies, settings);
         var dto = new InvoiceCommandPrintDto
         {
             InvoiceId = invoice.InvoiceId,
@@ -249,10 +253,17 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
             if (invoice == null)
                 return BadRequest(ApiResponse<PrintJobResultDto>.Fail("Invoice not found."));
 
-            var command = BuildReceiptInvoice(invoice, Math.Clamp(request.Copies, 1, 5));
-            await printer.SendRawCommandAsync(request.PrinterName, $"Invoice-{invoice.InvoiceNo}", command, cancellationToken);
+            var settings = await db.SystemSettings
+                .AsNoTracking()
+                .ToDictionaryAsync(x => x.SettingKey, x => x.SettingValue, cancellationToken);
+            var selectedPrinter = string.IsNullOrWhiteSpace(request.PrinterName)
+                ? ReadString(settings, "InvoicePrinterName", string.Empty)
+                : request.PrinterName.Trim();
+            var copies = Math.Clamp(request.Copies > 0 ? request.Copies : ReadInt(settings, "InvoicePrintCopies", 1), 1, 5);
+            var command = BuildReceiptInvoice(invoice, copies, settings);
+            await printer.SendRawCommandAsync(selectedPrinter, $"Invoice-{invoice.InvoiceNo}", command, cancellationToken);
 
-            var result = new PrintJobResultDto(true, request.PrinterName, $"Invoice-{invoice.InvoiceNo}", "Invoice sent to printer.");
+            var result = new PrintJobResultDto(true, selectedPrinter, $"Invoice-{invoice.InvoiceNo}", "Invoice sent to printer.");
             return Ok(ApiResponse<PrintJobResultDto>.Ok(result, result.Message));
         }
         catch (InvalidOperationException ex)
@@ -279,7 +290,7 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
 
     private static int ClampInt(int value, int min, int max) => Math.Min(Math.Max(value, min), max);
 
-    private static string BuildTsplBarcodeLabel(Domain.Entities.ParkingSession session, int copies)
+    private static string BuildTsplBarcodeLabel(Domain.Entities.ParkingSession session, int copies, Dictionary<string, string> settings, int direction)
     {
         var company = Clean(session.Company.CompanyName, 30);
         var vehicleRef = string.IsNullOrWhiteSpace(session.PlateNo)
@@ -288,26 +299,35 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
 
         var barcode = Clean(session.BarcodeNo, 28);
         var validUntil = session.Subscription?.EndDate.ToString("dd-MMM-yyyy") ?? "-";
+        var title = Clean(ReadString(settings, "BarcodeLabelTitle", "NETWORLD PARKING LOT"), 34);
+        var note = Clean(ReadString(settings, "BarcodeLabelNote", "One parking session only"), 38);
+        var symbology = NormalizeBarcodeSymbology(ReadString(settings, "BarcodeSymbology", "128"));
+        var humanReadable = ReadBool(settings, "BarcodeShowHumanReadable", true) ? 1 : 0;
+        var widthMm = ClampInt(ReadInt(settings, "BarcodeLabelWidthMm", 60), 25, 120);
+        var heightMm = ClampInt(ReadInt(settings, "BarcodeLabelHeightMm", 35), 15, 80);
+        var density = ClampInt(ReadInt(settings, "BarcodePrintDensity", 8), 1, 15);
+        var safeDirection = Math.Clamp(direction, 0, 1);
+        var safeCopies = Math.Clamp(copies, 1, 5);
 
         return $"""
-SIZE 60 mm,35 mm
+SIZE {widthMm} mm,{heightMm} mm
 GAP 3 mm,0 mm
-DENSITY 8
-DIRECTION 1
+DENSITY {density}
+DIRECTION {safeDirection}
 REFERENCE 0,0
 CLS
-TEXT 42,12,"2",0,1,1,"NETWORLD PARKING LOT"
+TEXT 42,12,"2",0,1,1,"{title}"
 TEXT 42,38,"1",0,1,1,"{company}"
 TEXT 42,60,"2",0,1,1,"{vehicleRef}"
-BARCODE 42,92,"128",78,1,0,1,2,"{barcode}"
-TEXT 42,196,"1",0,1,1,"{barcode}"
+BARCODE 42,92,"{symbology}",78,{humanReadable},0,1,2,"{barcode}"
 TEXT 42,218,"1",0,1,1,"Valid Until: {validUntil}"
-TEXT 42,240,"1",0,1,1,"One parking session only"
-PRINT {copies},1
+TEXT 42,240,"1",0,1,1,"{note}"
+PRINT {safeCopies},1
 """;
     }
 
-    private static string BuildZplBarcodeLabel(Domain.Entities.ParkingSession session, int copies)
+
+    private static string BuildZplBarcodeLabel(Domain.Entities.ParkingSession session, int copies, Dictionary<string, string> settings)
     {
         var company = Clean(session.Company.CompanyName, 30);
         var vehicleRef = string.IsNullOrWhiteSpace(session.PlateNo)
@@ -316,32 +336,55 @@ PRINT {copies},1
 
         var barcode = Clean(session.BarcodeNo, 28);
         var validUntil = session.Subscription?.EndDate.ToString("dd-MMM-yyyy") ?? "-";
+        var title = Clean(ReadString(settings, "BarcodeLabelTitle", "NETWORLD PARKING LOT"), 34);
+        var note = Clean(ReadString(settings, "BarcodeLabelNote", "One parking session only"), 38);
+        var symbology = NormalizeBarcodeSymbology(ReadString(settings, "BarcodeSymbology", "128"));
+        var humanReadable = ReadBool(settings, "BarcodeShowHumanReadable", true) ? "Y" : "N";
+        var widthMm = ClampInt(ReadInt(settings, "BarcodeLabelWidthMm", 60), 25, 120);
+        var heightMm = ClampInt(ReadInt(settings, "BarcodeLabelHeightMm", 35), 15, 80);
+        var dpi = ClampInt(ReadInt(settings, "BarcodePrinterDpi", 203), 150, 600);
+        var dotsPerMm = dpi / 25.4m;
+        var printWidth = Math.Max(280, (int)Math.Round(widthMm * dotsPerMm));
+        var labelLength = Math.Max(180, (int)Math.Round(heightMm * dotsPerMm));
+        var barcodeCommand = BuildZplBarcodeCommand(symbology, barcode, humanReadable);
+        var safeCopies = Math.Clamp(copies, 1, 5);
 
         return $"""
 ^XA
-^PW480
-^LL280
+^PW{printWidth}
+^LL{labelLength}
 ^LH0,0
-^FO42,12^A0N,22,22^FDNETWORLD PARKING LOT^FS
+^FO42,12^A0N,22,22^FD{title}^FS
 ^FO42,40^A0N,17,17^FD{company}^FS
 ^FO42,64^A0N,21,21^FD{vehicleRef}^FS
 ^BY1,2,78
-^FO42,94^BCN,78,Y,N,N
-^FD{barcode}^FS
+^FO42,94{barcodeCommand}
 ^FO42,206^A0N,15,15^FDValid Until: {validUntil}^FS
-^FO42,226^A0N,15,15^FDOne parking session only^FS
-^PQ{copies}
+^FO42,226^A0N,15,15^FD{note}^FS
+^PQ{safeCopies}
 ^XZ
 """;
     }
 
-    private static string BuildReceiptInvoice(Domain.Entities.ParkingInvoice invoice, int copies)
+
+    private static string BuildReceiptInvoice(Domain.Entities.ParkingInvoice invoice, int copies, Dictionary<string, string> settings)
     {
         var sb = new System.Text.StringBuilder();
-        for (var i = 0; i < copies; i++)
+        var companyName = Clean(ReadString(settings, "InvoiceCompanyName", "NETWORLD SMART PARKING"), 32);
+        var title = Clean(ReadString(settings, "InvoiceTitle", "PARKING INVOICE"), 32);
+        var address = Clean(ReadString(settings, "InvoiceAddress", string.Empty), 40);
+        var trn = Clean(ReadString(settings, "InvoiceTrn", string.Empty), 30);
+        var currency = Clean(ReadString(settings, "InvoiceCurrency", "AED"), 8);
+        var footer = Clean(ReadString(settings, "InvoiceFooterText", "Thank you"), 38);
+        var showVatLine = ReadBool(settings, "InvoiceShowVatLine", true);
+        var safeCopies = Math.Clamp(copies, 1, 5);
+
+        for (var i = 0; i < safeCopies; i++)
         {
-            sb.AppendLine("NETWORLD SMART PARKING");
-            sb.AppendLine("PARKING INVOICE");
+            sb.AppendLine(companyName);
+            if (!string.IsNullOrWhiteSpace(address) && address != "-") sb.AppendLine(address);
+            if (!string.IsNullOrWhiteSpace(trn) && trn != "-") sb.AppendLine($"TRN: {trn}");
+            sb.AppendLine(title);
             sb.AppendLine("--------------------------------");
             sb.AppendLine($"Invoice No : {invoice.InvoiceNo}");
             sb.AppendLine($"Date       : {invoice.InvoiceDate:dd-MMM-yyyy HH:mm}");
@@ -350,16 +393,16 @@ PRINT {copies},1
             sb.AppendLine($"Plan       : {invoice.PlanType ?? "-"}");
             sb.AppendLine($"Slots      : {invoice.Slots}");
             sb.AppendLine("--------------------------------");
-            sb.AppendLine($"Sub Total  : AED {invoice.SubTotal:n2}");
-            sb.AppendLine($"Discount   : AED {invoice.DiscountAmount:n2}");
-            sb.AppendLine($"VAT        : AED {invoice.VatAmount:n2}");
-            sb.AppendLine($"Total      : AED {invoice.TotalAmount:n2}");
-            sb.AppendLine($"Paid       : AED {invoice.PaidAmount:n2}");
-            sb.AppendLine($"Balance    : AED {invoice.BalanceAmount:n2}");
+            sb.AppendLine($"Sub Total  : {currency} {invoice.SubTotal:n2}");
+            sb.AppendLine($"Discount   : {currency} {invoice.DiscountAmount:n2}");
+            if (showVatLine) sb.AppendLine($"VAT        : {currency} {invoice.VatAmount:n2}");
+            sb.AppendLine($"Total      : {currency} {invoice.TotalAmount:n2}");
+            sb.AppendLine($"Paid       : {currency} {invoice.PaidAmount:n2}");
+            sb.AppendLine($"Balance    : {currency} {invoice.BalanceAmount:n2}");
             sb.AppendLine("--------------------------------");
             var printStatus = invoice.BalanceAmount <= 0 ? "Paid" : invoice.PaidAmount > 0 ? "Partial" : "Unpaid";
             sb.AppendLine($"Status     : {printStatus}");
-            sb.AppendLine("Thank you");
+            sb.AppendLine(footer);
             sb.AppendLine();
             sb.AppendLine();
             sb.AppendLine();
@@ -368,4 +411,38 @@ PRINT {copies},1
         }
         return sb.ToString();
     }
+
+    private static string BuildZplBarcodeCommand(string symbology, string barcode, string humanReadable)
+    {
+        return symbology switch
+        {
+            "39" or "CODE39" => $"^B3N,N,78,{humanReadable},N^FD{barcode}^FS",
+            "EAN13" => $"^BEN,78,{humanReadable},N^FD{barcode}^FS",
+            "EAN8" => $"^B8N,78,{humanReadable},N^FD{barcode}^FS",
+            _ => $"^BCN,78,{humanReadable},N,N^FD{barcode}^FS"
+        };
+    }
+
+    private static string NormalizePrinterLanguage(string? value)
+    {
+        var clean = string.IsNullOrWhiteSpace(value) ? "TSPL" : value.Trim().ToUpperInvariant();
+        return clean == "ZPL" ? "ZPL" : "TSPL";
+    }
+
+    private static string NormalizeBarcodeSymbology(string? value)
+    {
+        var clean = string.IsNullOrWhiteSpace(value) ? "128" : value.Trim().ToUpperInvariant();
+        clean = clean.Replace("CODE", string.Empty).Replace("-", string.Empty).Replace(" ", string.Empty);
+        return clean switch
+        {
+            "39" => "39",
+            "93" => "93",
+            "EAN13" or "EAN-13" => "EAN13",
+            "EAN8" or "EAN-8" => "EAN8",
+            "CODABAR" => "CODABAR",
+            "ITF" or "I25" or "INTERLEAVED2OF5" => "ITF",
+            _ => "128"
+        };
+    }
+
 }
