@@ -121,6 +121,14 @@ public sealed class SettingsService(NetworldParkingDbContext db) : ISettingsServ
             BarcodePrintMode = ReadString(settings, "BarcodePrintMode", "Command"),
             BarcodeLabelWidthMm = ReadInt(settings, "BarcodeLabelWidthMm", 60),
             BarcodeLabelHeightMm = ReadInt(settings, "BarcodeLabelHeightMm", 35),
+            BarcodeBarWidth = ReadInt(settings, "BarcodeBarWidth", 2),
+            BarcodeBarHeight = ReadInt(settings, "BarcodeBarHeight", 78),
+            BarcodeSymbolWidthMm = ReadInt(settings, "BarcodeSymbolWidthMm", 48),
+            BarcodeSymbolHeightMm = ReadInt(settings, "BarcodeSymbolHeightMm", 12),
+            BarcodeMarginLeftMm = ReadInt(settings, "BarcodeMarginLeftMm", 5),
+            BarcodeMarginTopMm = ReadInt(settings, "BarcodeMarginTopMm", 2),
+            BarcodeMarginRightMm = ReadInt(settings, "BarcodeMarginRightMm", 5),
+            BarcodeMarginBottomMm = ReadInt(settings, "BarcodeMarginBottomMm", 2),
             BarcodePrinterDpi = ReadInt(settings, "BarcodePrinterDpi", 203),
             BarcodePrinterDirection = ReadInt(settings, "BarcodePrinterDirection", 1),
             BarcodePrintDensity = ReadInt(settings, "BarcodePrintDensity", 8),
@@ -204,6 +212,27 @@ public sealed class SettingsService(NetworldParkingDbContext db) : ISettingsServ
             throw new InvalidOperationException("Barcode label width must be between 25 and 120 mm.");
         if (request.Barcode.BarcodeLabelHeightMm is < 15 or > 80)
             throw new InvalidOperationException("Barcode label height must be between 15 and 80 mm.");
+        if (request.Barcode.BarcodeBarWidth is < 1 or > 4)
+            throw new InvalidOperationException("Barcode width must be between 1 and 4.");
+        if (request.Barcode.BarcodeBarHeight is < 40 or > 220)
+            throw new InvalidOperationException("Barcode height must be between 40 and 220 dots.");
+        if (request.Barcode.BarcodeSymbolWidthMm is < 10 or > 110)
+            throw new InvalidOperationException("Barcode width must be between 10 and 110 mm.");
+        if (request.Barcode.BarcodeSymbolHeightMm is < 5 or > 50)
+            throw new InvalidOperationException("Barcode height must be between 5 and 50 mm.");
+        if (request.Barcode.BarcodeMarginLeftMm is < 0 or > 30 ||
+            request.Barcode.BarcodeMarginTopMm is < 0 or > 30 ||
+            request.Barcode.BarcodeMarginRightMm is < 0 or > 30 ||
+            request.Barcode.BarcodeMarginBottomMm is < 0 or > 30)
+            throw new InvalidOperationException("Barcode margins must be between 0 and 30 mm.");
+        if (request.Barcode.BarcodeMarginLeftMm + request.Barcode.BarcodeMarginRightMm >= request.Barcode.BarcodeLabelWidthMm)
+            throw new InvalidOperationException("Barcode left and right margins must be smaller than the label width.");
+        if (request.Barcode.BarcodeMarginTopMm + request.Barcode.BarcodeMarginBottomMm >= request.Barcode.BarcodeLabelHeightMm)
+            throw new InvalidOperationException("Barcode top and bottom margins must be smaller than the label height.");
+        if (request.Barcode.BarcodeMarginLeftMm + request.Barcode.BarcodeMarginRightMm + request.Barcode.BarcodeSymbolWidthMm > request.Barcode.BarcodeLabelWidthMm)
+            throw new InvalidOperationException("Barcode width plus left/right margins cannot be larger than the label width.");
+        if (request.Barcode.BarcodeMarginTopMm + request.Barcode.BarcodeMarginBottomMm + request.Barcode.BarcodeSymbolHeightMm > request.Barcode.BarcodeLabelHeightMm)
+            throw new InvalidOperationException("Barcode height plus top/bottom margins cannot be larger than the label height.");
         if (request.Barcode.BarcodePrinterDpi is < 150 or > 600)
             throw new InvalidOperationException("Barcode printer DPI must be between 150 and 600.");
         if (request.Barcode.BarcodePrinterDirection is < 0 or > 1)
@@ -256,6 +285,14 @@ public sealed class SettingsService(NetworldParkingDbContext db) : ISettingsServ
             ["BarcodePrintMode"] = Value(CleanText(b.BarcodePrintMode, 50, "Command"), "Barcode printing mode: Command or Image"),
             ["BarcodeLabelWidthMm"] = Value(b.BarcodeLabelWidthMm, "Barcode label width in millimeters"),
             ["BarcodeLabelHeightMm"] = Value(b.BarcodeLabelHeightMm, "Barcode label height in millimeters"),
+            ["BarcodeBarWidth"] = Value(b.BarcodeBarWidth, "Barcode bar width/module size used in raw printer commands"),
+            ["BarcodeBarHeight"] = Value(b.BarcodeBarHeight, "Barcode bar height in printer dots used in raw printer commands"),
+            ["BarcodeSymbolWidthMm"] = Value(b.BarcodeSymbolWidthMm, "Barcode symbol width in millimeters"),
+            ["BarcodeSymbolHeightMm"] = Value(b.BarcodeSymbolHeightMm, "Barcode symbol height in millimeters"),
+            ["BarcodeMarginLeftMm"] = Value(b.BarcodeMarginLeftMm, "Barcode label left margin in millimeters"),
+            ["BarcodeMarginTopMm"] = Value(b.BarcodeMarginTopMm, "Barcode label top margin in millimeters"),
+            ["BarcodeMarginRightMm"] = Value(b.BarcodeMarginRightMm, "Barcode label right margin in millimeters"),
+            ["BarcodeMarginBottomMm"] = Value(b.BarcodeMarginBottomMm, "Barcode label bottom margin in millimeters"),
             ["BarcodePrinterDpi"] = Value(b.BarcodePrinterDpi, "Barcode label printer DPI"),
             ["BarcodePrinterDirection"] = Value(b.BarcodePrinterDirection, "TSPL print direction 0 or 1"),
             ["BarcodePrintDensity"] = Value(b.BarcodePrintDensity, "Thermal barcode print density"),

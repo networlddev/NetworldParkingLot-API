@@ -52,6 +52,14 @@ public sealed class BarcodeSettingsDto
     public string BarcodePrintMode { get; set; } = "Command";
     public int BarcodeLabelWidthMm { get; set; } = 60;
     public int BarcodeLabelHeightMm { get; set; } = 35;
+    public int BarcodeBarWidth { get; set; } = 2;
+    public int BarcodeBarHeight { get; set; } = 78;
+    public int BarcodeSymbolWidthMm { get; set; } = 48;
+    public int BarcodeSymbolHeightMm { get; set; } = 12;
+    public int BarcodeMarginLeftMm { get; set; } = 5;
+    public int BarcodeMarginTopMm { get; set; } = 2;
+    public int BarcodeMarginRightMm { get; set; } = 5;
+    public int BarcodeMarginBottomMm { get; set; } = 2;
     public int BarcodePrinterDpi { get; set; } = 203;
     public int BarcodePrinterDirection { get; set; } = 1;
     public int BarcodePrintDensity { get; set; } = 8;

@@ -7,6 +7,10 @@ using NetworldParkingLot.Api.Data;
 using NetworldParkingLot.Api.Features.GateOperations.Dtos;
 using NetworldParkingLot.Api.Features.UserAccess.Filters;
 using NetworldParkingLot.Api.Infrastructure.Printing;
+using SkiaSharp;
+using ZXing;
+using ZXing.Common;
+using ZXing.SkiaSharp;
 
 namespace NetworldParkingLot.Api.Features.GateOperations.Controllers;
 
@@ -45,6 +49,10 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         var labelWidthMm = ClampInt(widthMm ?? ReadInt(settings, "BarcodeLabelWidthMm", 60), 25, 120);
         var labelHeightMm = ClampInt(heightMm ?? ReadInt(settings, "BarcodeLabelHeightMm", 35), 15, 80);
         var labelDpi = ClampInt(dpi ?? ReadInt(settings, "BarcodePrinterDpi", 203), 150, 600);
+        var marginLeftMm = ClampInt(ReadInt(settings, "BarcodeMarginLeftMm", 5), 0, 30);
+        var marginTopMm = ClampInt(ReadInt(settings, "BarcodeMarginTopMm", 2), 0, 30);
+        var marginRightMm = ClampInt(ReadInt(settings, "BarcodeMarginRightMm", 5), 0, 30);
+        var marginBottomMm = ClampInt(ReadInt(settings, "BarcodeMarginBottomMm", 2), 0, 30);
         var shouldRotate = rotate90 ?? ReadBool(settings, "BarcodeRotate90", false);
 
         var validUntil = session.Subscription?.EndDate.ToString("dd-MMM-yyyy") ?? "-";
@@ -62,6 +70,10 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
             widthMm: labelWidthMm,
             heightMm: labelHeightMm,
             dpi: labelDpi,
+            marginLeftMm: marginLeftMm,
+            marginTopMm: marginTopMm,
+            marginRightMm: marginRightMm,
+            marginBottomMm: marginBottomMm,
             rotate90: shouldRotate);
 
         var responseWidthMm = shouldRotate ? labelHeightMm : labelWidthMm;
@@ -289,6 +301,91 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         settings.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value.Trim() : fallback;
 
     private static int ClampInt(int value, int min, int max) => Math.Min(Math.Max(value, min), max);
+    private static int MmToDots(int mm, int dpi) => Math.Max(0, (int)Math.Round(mm / 25.4d * dpi));
+    private static PrinterBitmap BuildBarcodeBitmap(string barcode, string symbology, int widthDots, int heightDots)
+    {
+        var targetWidth = Math.Max(24, widthDots);
+        var targetHeight = Math.Max(24, heightDots);
+        var writer = new BarcodeWriter
+        {
+            Format = BarcodeFormatFromSymbology(symbology),
+            Options = new EncodingOptions
+            {
+                Width = Math.Max(240, targetWidth * 3),
+                Height = Math.Max(80, targetHeight),
+                Margin = 0,
+                PureBarcode = true
+            }
+        };
+
+        using var source = writer.Write(barcode);
+        var bounds = FindBlackBounds(source);
+        var bytesPerRow = (targetWidth + 7) / 8;
+        var bytes = new byte[bytesPerRow * targetHeight];
+
+        for (var y = 0; y < targetHeight; y++)
+        {
+            var sourceY = bounds.Top + ((long)y * bounds.Height / targetHeight);
+            for (var x = 0; x < targetWidth; x++)
+            {
+                var sourceX = bounds.Left + ((long)x * bounds.Width / targetWidth);
+                var color = source.GetPixel((int)sourceX, (int)sourceY);
+                var isBlack = color.Red < 128 && color.Green < 128 && color.Blue < 128 && color.Alpha > 0;
+                if (!isBlack) continue;
+
+                var index = (y * bytesPerRow) + (x / 8);
+                bytes[index] |= (byte)(0x80 >> (x % 8));
+            }
+        }
+
+        return new(targetWidth, targetHeight, bytesPerRow, Convert.ToHexString(bytes));
+    }
+
+    private static SKRectI FindBlackBounds(SKBitmap bitmap)
+    {
+        var left = bitmap.Width;
+        var top = bitmap.Height;
+        var right = -1;
+        var bottom = -1;
+
+        for (var y = 0; y < bitmap.Height; y++)
+        {
+            for (var x = 0; x < bitmap.Width; x++)
+            {
+                var color = bitmap.GetPixel(x, y);
+                var isBlack = color.Red < 128 && color.Green < 128 && color.Blue < 128 && color.Alpha > 0;
+                if (!isBlack) continue;
+
+                if (x < left) left = x;
+                if (x > right) right = x;
+                if (y < top) top = y;
+                if (y > bottom) bottom = y;
+            }
+        }
+
+        if (right < left || bottom < top)
+            return new SKRectI(0, 0, bitmap.Width, bitmap.Height);
+
+        return new SKRectI(left, top, right + 1, bottom + 1);
+    }
+
+    private static int CenteredTsplTextX(int left, int boxWidth, string text, int fontWidthDots = 8)
+    {
+        var textWidth = Math.Max(0, text.Length * fontWidthDots);
+        return Math.Max(0, left + ((boxWidth - textWidth) / 2));
+    }
+
+    private static BarcodeFormat BarcodeFormatFromSymbology(string symbology) => symbology switch
+    {
+        "39" or "CODE39" => BarcodeFormat.CODE_39,
+        "EAN13" => BarcodeFormat.EAN_13,
+        "EAN8" => BarcodeFormat.EAN_8,
+        "CODABAR" => BarcodeFormat.CODABAR,
+        "ITF" => BarcodeFormat.ITF,
+        _ => BarcodeFormat.CODE_128
+    };
+
+    private sealed record PrinterBitmap(int WidthDots, int HeightDots, int BytesPerRow, string HexData);
 
     private static string BuildTsplBarcodeLabel(Domain.Entities.ParkingSession session, int copies, Dictionary<string, string> settings, int direction)
     {
@@ -305,25 +402,49 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         var humanReadable = ReadBool(settings, "BarcodeShowHumanReadable", true) ? 1 : 0;
         var widthMm = ClampInt(ReadInt(settings, "BarcodeLabelWidthMm", 60), 25, 120);
         var heightMm = ClampInt(ReadInt(settings, "BarcodeLabelHeightMm", 35), 15, 80);
+        var dpi = ClampInt(ReadInt(settings, "BarcodePrinterDpi", 203), 150, 600);
+        var symbolWidthMm = ClampInt(ReadInt(settings, "BarcodeSymbolWidthMm", 48), 10, 110);
+        var symbolHeightMm = ClampInt(ReadInt(settings, "BarcodeSymbolHeightMm", 12), 5, 50);
+        var marginLeft = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginLeftMm", 5), 0, 30), dpi);
+        var marginRight = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginRightMm", 5), 0, 30), dpi);
+        var marginTop = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginTopMm", 2), 0, 30), dpi);
+        var marginBottom = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginBottomMm", 2), 0, 30), dpi);
+        var labelWidthDots = MmToDots(widthMm, dpi);
+        var labelHeightDots = MmToDots(heightMm, dpi);
         var density = ClampInt(ReadInt(settings, "BarcodePrintDensity", 8), 1, 15);
         var safeDirection = Math.Clamp(direction, 0, 1);
         var safeCopies = Math.Clamp(copies, 1, 5);
+        var contentX = marginLeft;
+        var titleY = marginTop;
+        var companyY = titleY + 26;
+        var vehicleY = companyY + 22;
+        var barcodeY = vehicleY + 32;
+        var maxSymbolWidth = Math.Max(80, labelWidthDots - marginLeft - marginRight);
+        var maxSymbolHeight = Math.Max(24, labelHeightDots - marginBottom - barcodeY - (humanReadable == 1 ? 70 : 40));
+        var symbolWidthDots = Math.Min(MmToDots(symbolWidthMm, dpi), maxSymbolWidth);
+        var symbolHeightDots = Math.Min(MmToDots(symbolHeightMm, dpi), maxSymbolHeight);
+        var barcodeImage = BuildBarcodeBitmap(barcode, symbology, symbolWidthDots, symbolHeightDots);
+        var barcodeTextX = CenteredTsplTextX(contentX, barcodeImage.WidthDots, barcode);
+        var footerY = barcodeY + barcodeImage.HeightDots + (humanReadable == 1 ? 24 : 14);
+        var noteY = footerY + 22;
 
-        return $"""
-SIZE {widthMm} mm,{heightMm} mm
-GAP 3 mm,0 mm
-DENSITY {density}
-DIRECTION {safeDirection}
-REFERENCE 0,0
-CLS
-TEXT 42,12,"2",0,1,1,"{title}"
-TEXT 42,38,"1",0,1,1,"{company}"
-TEXT 42,60,"2",0,1,1,"{vehicleRef}"
-BARCODE 42,92,"{symbology}",78,{humanReadable},0,1,2,"{barcode}"
-TEXT 42,218,"1",0,1,1,"Valid Until: {validUntil}"
-TEXT 42,240,"1",0,1,1,"{note}"
-PRINT {safeCopies},1
-""";
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"SIZE {widthMm} mm,{heightMm} mm");
+        sb.AppendLine("GAP 3 mm,0 mm");
+        sb.AppendLine($"DENSITY {density}");
+        sb.AppendLine($"DIRECTION {safeDirection}");
+        sb.AppendLine("REFERENCE 0,0");
+        sb.AppendLine("CLS");
+        sb.AppendLine($"TEXT {contentX},{titleY},\"2\",0,1,1,\"{title}\"");
+        sb.AppendLine($"TEXT {contentX},{companyY},\"1\",0,1,1,\"{company}\"");
+        sb.AppendLine($"TEXT {contentX},{vehicleY},\"2\",0,1,1,\"{vehicleRef}\"");
+        sb.AppendLine($"BITMAP {contentX},{barcodeY},{barcodeImage.BytesPerRow},{barcodeImage.HeightDots},0,{barcodeImage.HexData}");
+        if (humanReadable == 1)
+            sb.AppendLine($"TEXT {barcodeTextX},{barcodeY + barcodeImage.HeightDots + 4},\"1\",0,1,1,\"{barcode}\"");
+        sb.AppendLine($"TEXT {contentX},{footerY},\"1\",0,1,1,\"Valid Until: {validUntil}\"");
+        sb.AppendLine($"TEXT {contentX},{noteY},\"1\",0,1,1,\"{note}\"");
+        sb.AppendLine($"PRINT {safeCopies},1");
+        return sb.ToString();
     }
 
 
@@ -343,27 +464,45 @@ PRINT {safeCopies},1
         var widthMm = ClampInt(ReadInt(settings, "BarcodeLabelWidthMm", 60), 25, 120);
         var heightMm = ClampInt(ReadInt(settings, "BarcodeLabelHeightMm", 35), 15, 80);
         var dpi = ClampInt(ReadInt(settings, "BarcodePrinterDpi", 203), 150, 600);
+        var symbolWidthMm = ClampInt(ReadInt(settings, "BarcodeSymbolWidthMm", 48), 10, 110);
+        var symbolHeightMm = ClampInt(ReadInt(settings, "BarcodeSymbolHeightMm", 12), 5, 50);
+        var marginLeft = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginLeftMm", 5), 0, 30), dpi);
+        var marginRight = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginRightMm", 5), 0, 30), dpi);
+        var marginTop = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginTopMm", 2), 0, 30), dpi);
+        var marginBottom = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginBottomMm", 2), 0, 30), dpi);
         var dotsPerMm = dpi / 25.4m;
         var printWidth = Math.Max(280, (int)Math.Round(widthMm * dotsPerMm));
         var labelLength = Math.Max(180, (int)Math.Round(heightMm * dotsPerMm));
-        var barcodeCommand = BuildZplBarcodeCommand(symbology, barcode, humanReadable);
+        var titleY = marginTop;
+        var companyY = titleY + 28;
+        var vehicleY = companyY + 24;
+        var barcodeY = vehicleY + 34;
+        var maxSymbolWidth = Math.Max(80, printWidth - marginLeft - marginRight);
+        var maxSymbolHeight = Math.Max(24, labelLength - marginBottom - barcodeY - (humanReadable == "Y" ? 54 : 32));
+        var symbolWidthDots = Math.Min(MmToDots(symbolWidthMm, dpi), maxSymbolWidth);
+        var symbolHeightDots = Math.Min(MmToDots(symbolHeightMm, dpi), maxSymbolHeight);
+        var barcodeImage = BuildBarcodeBitmap(barcode, symbology, symbolWidthDots, symbolHeightDots);
         var safeCopies = Math.Clamp(copies, 1, 5);
+        var footerY = barcodeY + barcodeImage.HeightDots + (humanReadable == "Y" ? 28 : 16);
+        var noteY = footerY + 20;
 
-        return $"""
-^XA
-^PW{printWidth}
-^LL{labelLength}
-^LH0,0
-^FO42,12^A0N,22,22^FD{title}^FS
-^FO42,40^A0N,17,17^FD{company}^FS
-^FO42,64^A0N,21,21^FD{vehicleRef}^FS
-^BY1,2,78
-^FO42,94{barcodeCommand}
-^FO42,206^A0N,15,15^FDValid Until: {validUntil}^FS
-^FO42,226^A0N,15,15^FD{note}^FS
-^PQ{safeCopies}
-^XZ
-""";
+        var totalBytes = barcodeImage.BytesPerRow * barcodeImage.HeightDots;
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("^XA");
+        sb.AppendLine($"^PW{printWidth}");
+        sb.AppendLine($"^LL{labelLength}");
+        sb.AppendLine("^LH0,0");
+        sb.AppendLine($"^FO{marginLeft},{titleY}^A0N,22,22^FD{title}^FS");
+        sb.AppendLine($"^FO{marginLeft},{companyY}^A0N,17,17^FD{company}^FS");
+        sb.AppendLine($"^FO{marginLeft},{vehicleY}^A0N,21,21^FD{vehicleRef}^FS");
+        sb.AppendLine($"^FO{marginLeft},{barcodeY}^GFA,{totalBytes},{totalBytes},{barcodeImage.BytesPerRow},{barcodeImage.HexData}^FS");
+        if (humanReadable == "Y")
+            sb.AppendLine($"^FO{marginLeft},{barcodeY + barcodeImage.HeightDots + 4}^FB{barcodeImage.WidthDots},1,0,C^A0N,15,15^FD{barcode}^FS");
+        sb.AppendLine($"^FO{marginLeft},{footerY}^A0N,15,15^FDValid Until: {validUntil}^FS");
+        sb.AppendLine($"^FO{marginLeft},{noteY}^A0N,15,15^FD{note}^FS");
+        sb.AppendLine($"^PQ{safeCopies}");
+        sb.AppendLine("^XZ");
+        return sb.ToString();
     }
 
 
@@ -412,14 +551,14 @@ PRINT {safeCopies},1
         return sb.ToString();
     }
 
-    private static string BuildZplBarcodeCommand(string symbology, string barcode, string humanReadable)
+    private static string BuildZplBarcodeCommand(string symbology, string barcode, string humanReadable, int barHeight)
     {
         return symbology switch
         {
-            "39" or "CODE39" => $"^B3N,N,78,{humanReadable},N^FD{barcode}^FS",
-            "EAN13" => $"^BEN,78,{humanReadable},N^FD{barcode}^FS",
-            "EAN8" => $"^B8N,78,{humanReadable},N^FD{barcode}^FS",
-            _ => $"^BCN,78,{humanReadable},N,N^FD{barcode}^FS"
+            "39" or "CODE39" => $"^B3N,N,{barHeight},{humanReadable},N^FD{barcode}^FS",
+            "EAN13" => $"^BEN,{barHeight},{humanReadable},N^FD{barcode}^FS",
+            "EAN8" => $"^B8N,{barHeight},{humanReadable},N^FD{barcode}^FS",
+            _ => $"^BCN,{barHeight},{humanReadable},N,N^FD{barcode}^FS"
         };
     }
 

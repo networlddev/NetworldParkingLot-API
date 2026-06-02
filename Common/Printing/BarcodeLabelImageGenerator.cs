@@ -17,10 +17,21 @@ public static class BarcodeLabelImageGenerator
         int widthMm,
         int heightMm,
         int dpi,
+        int marginLeftMm,
+        int marginTopMm,
+        int marginRightMm,
+        int marginBottomMm,
         bool rotate90)
     {
         var widthPx = MmToPx(widthMm, dpi);
         var heightPx = MmToPx(heightMm, dpi);
+        var marginLeftPx = Math.Min(MmToPx(Math.Max(0, marginLeftMm), dpi), widthPx - 2);
+        var marginTopPx = Math.Min(MmToPx(Math.Max(0, marginTopMm), dpi), heightPx - 2);
+        var marginRightPx = Math.Min(MmToPx(Math.Max(0, marginRightMm), dpi), widthPx - marginLeftPx - 1);
+        var marginBottomPx = Math.Min(MmToPx(Math.Max(0, marginBottomMm), dpi), heightPx - marginTopPx - 1);
+        var contentLeft = marginLeftPx;
+        var contentRight = Math.Max(contentLeft + 1, widthPx - marginRightPx);
+        var contentCenterX = (contentLeft + contentRight) / 2f;
 
         using var surface = SKSurface.Create(new SKImageInfo(widthPx, heightPx, SKColorType.Rgba8888, SKAlphaType.Premul));
         var canvas = surface.Canvas;
@@ -40,14 +51,16 @@ public static class BarcodeLabelImageGenerator
 
         // 60mm x 35mm at 203 DPI is around 480 x 280 px.
         // These positions are intentionally pixel-based to keep the final printed image stable.
-        DrawCenteredText(canvas, Safe(projectName, 34), widthPx / 2f, ScaleY(22, heightPx), ScaleFont(15, heightPx), true, black);
-        DrawCenteredText(canvas, Safe(companyName, 38), widthPx / 2f, ScaleY(43, heightPx), ScaleFont(12, heightPx), true, black);
-        DrawCenteredText(canvas, Safe(vehicleReference, 30), widthPx / 2f, ScaleY(68, heightPx), ScaleFont(18, heightPx), true, black);
+        var topOffset = marginTopPx - ScaleY(16, heightPx);
+        DrawCenteredText(canvas, Safe(projectName, 34), contentCenterX, topOffset + ScaleY(22, heightPx), ScaleFont(15, heightPx), true, black);
+        DrawCenteredText(canvas, Safe(companyName, 38), contentCenterX, topOffset + ScaleY(43, heightPx), ScaleFont(12, heightPx), true, black);
+        DrawCenteredText(canvas, Safe(vehicleReference, 30), contentCenterX, topOffset + ScaleY(68, heightPx), ScaleFont(18, heightPx), true, black);
 
-        var barcodeTop = ScaleY(84, heightPx);
-        var barcodeHeight = ScaleY(82, heightPx);
-        var barcodeLeft = ScaleX(36, widthPx);
-        var barcodeRight = widthPx - ScaleX(36, widthPx);
+        var barcodeTop = topOffset + ScaleY(84, heightPx);
+        var barcodeLeft = contentLeft;
+        var barcodeRight = contentRight;
+        var maxBarcodeHeight = heightPx - marginBottomPx - barcodeTop - ScaleY(64, heightPx);
+        var barcodeHeight = Math.Max(ScaleY(35, heightPx), Math.Min(ScaleY(82, heightPx), maxBarcodeHeight));
 
         using var barcodeBitmap = GenerateCode128Bitmap(
             barcodeNo,
@@ -58,9 +71,9 @@ public static class BarcodeLabelImageGenerator
             barcodeBitmap,
             new SKRect(barcodeLeft, barcodeTop, barcodeRight, barcodeTop + barcodeHeight));
 
-        DrawCenteredText(canvas, Safe(barcodeNo, 34), widthPx / 2f, ScaleY(186, heightPx), ScaleFont(12, heightPx), true, black);
-        DrawCenteredText(canvas, Safe($"Valid Until: {validUntil}", 42), widthPx / 2f, ScaleY(207, heightPx), ScaleFont(9, heightPx), false, gray);
-        DrawCenteredText(canvas, Safe(note, 46), widthPx / 2f, ScaleY(226, heightPx), ScaleFont(8.5f, heightPx), false, gray);
+        DrawCenteredText(canvas, Safe(barcodeNo, 34), contentCenterX, barcodeTop + barcodeHeight + ScaleY(20, heightPx), ScaleFont(12, heightPx), true, black);
+        DrawCenteredText(canvas, Safe($"Valid Until: {validUntil}", 42), contentCenterX, barcodeTop + barcodeHeight + ScaleY(41, heightPx), ScaleFont(9, heightPx), false, gray);
+        DrawCenteredText(canvas, Safe(note, 46), contentCenterX, barcodeTop + barcodeHeight + ScaleY(60, heightPx), ScaleFont(8.5f, heightPx), false, gray);
 
         using var image = surface.Snapshot();
 
