@@ -1,8 +1,11 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using NetworldParkingLot.Api.Common;
+using NetworldParkingLot.Api.Common.Security;
+using NetworldParkingLot.Api.Domain.Constants;
 using NetworldParkingLot.Api.Features.GateOperations.Dtos;
 using NetworldParkingLot.Api.Features.GateOperations.Services;
+using NetworldParkingLot.Api.Features.SystemActivity.Services;
 using NetworldParkingLot.Api.Features.UserAccess.Filters;
 
 namespace NetworldParkingLot.Api.Features.GateOperations.Controllers;
@@ -10,7 +13,7 @@ namespace NetworldParkingLot.Api.Features.GateOperations.Controllers;
 [Authorize]
 [ApiController]
 [Route("api/gate-operation")]
-public sealed class GateOperationsController(IGateOperationService service) : ControllerBase
+public sealed class GateOperationsController(IGateOperationService service, ISystemActivityService activityService) : ControllerBase
 {
     [RequireParkingPermission("dashboard", "view")]
     [HttpGet("summary")]
@@ -100,7 +103,7 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     {
         try
         {
-            var data = await service.CreateCompanyWithSubscriptionAsync(request, cancellationToken);
+            var data = await service.CreateCompanyWithSubscriptionAsync(StampOperator(request), cancellationToken);
             return Ok(ApiResponse<CompanyListItemDto>.Ok(data, "Company and subscription created."));
         }
         catch (InvalidOperationException ex)
@@ -115,7 +118,7 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     {
         try
         {
-            var data = await service.UpdateCompanyAsync(companyId, request, cancellationToken);
+            var data = await service.UpdateCompanyAsync(companyId, StampOperator(request), cancellationToken);
             return Ok(ApiResponse<CompanyListItemDto>.Ok(data, "Company updated."));
         }
         catch (InvalidOperationException ex)
@@ -239,7 +242,7 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     {
         try
         {
-            var data = await service.CreateSubscriptionAsync(request, cancellationToken);
+            var data = await service.CreateSubscriptionAsync(StampOperator(request), cancellationToken);
             return Ok(ApiResponse<SubscriptionListItemDto>.Ok(data, "Subscription invoice created."));
         }
         catch (InvalidOperationException ex)
@@ -254,7 +257,7 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     {
         try
         {
-            var data = await service.UpdateSubscriptionAsync(subscriptionId, request, cancellationToken);
+            var data = await service.UpdateSubscriptionAsync(subscriptionId, StampOperator(request), cancellationToken);
             return Ok(ApiResponse<SubscriptionListItemDto>.Ok(data, "Subscription updated."));
         }
         catch (InvalidOperationException ex)
@@ -269,7 +272,7 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     {
         try
         {
-            var data = await service.CancelSubscriptionAsync(subscriptionId, request, cancellationToken);
+            var data = await service.CancelSubscriptionAsync(subscriptionId, StampOperator(request), cancellationToken);
             return Ok(ApiResponse<SubscriptionListItemDto>.Ok(data, "Subscription cancelled."));
         }
         catch (InvalidOperationException ex)
@@ -284,7 +287,7 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     {
         try
         {
-            var data = await service.RenewSubscriptionAsync(subscriptionId, request, cancellationToken);
+            var data = await service.RenewSubscriptionAsync(subscriptionId, StampOperator(request), cancellationToken);
             return Ok(ApiResponse<SubscriptionListItemDto>.Ok(data, "Subscription renewed."));
         }
         catch (InvalidOperationException ex)
@@ -299,7 +302,7 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     {
         try
         {
-            var data = await service.CheckCompanyAsync(request, cancellationToken);
+            var data = await service.CheckCompanyAsync(StampOperator(request), cancellationToken);
             return Ok(ApiResponse<CompanyGateStatusDto>.Ok(data));
         }
         catch (InvalidOperationException ex)
@@ -314,11 +317,12 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     {
         try
         {
-            var data = await service.GenerateBarcodeAsync(request, cancellationToken);
+            var data = await service.GenerateBarcodeAsync(StampOperator(request), cancellationToken);
             return Ok(ApiResponse<GenerateBarcodeResponseDto>.Ok(data, "Barcode generated. Print sticker and allow entry."));
         }
         catch (InvalidOperationException ex)
         {
+            await RecordGateFailureAsync(ParkingConstants.GateActionType.BarcodeGenerated, "ParkingSession", null, "Barcode generation failed", ex.Message, cancellationToken);
             return BadRequest(ApiResponse<GenerateBarcodeResponseDto>.Fail(ex.Message));
         }
     }
@@ -329,11 +333,12 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     {
         try
         {
-            var data = await service.AllowEntryAsync(request, cancellationToken);
+            var data = await service.AllowEntryAsync(StampOperator(request), cancellationToken);
             return Ok(ApiResponse<EntryResultDto>.Ok(data, "Entry allowed."));
         }
         catch (InvalidOperationException ex)
         {
+            await RecordGateFailureAsync(ParkingConstants.GateActionType.EntryAllowed, "ParkingSession", request.SessionId.ToString(), "Entry failed", ex.Message, cancellationToken);
             return BadRequest(ApiResponse<EntryResultDto>.Fail(ex.Message));
         }
     }
@@ -344,11 +349,12 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     {
         try
         {
-            var data = await service.RejectEntryAsync(request, cancellationToken);
+            var data = await service.RejectEntryAsync(StampOperator(request), cancellationToken);
             return Ok(ApiResponse<EntryResultDto>.Ok(data, "Entry rejected."));
         }
         catch (InvalidOperationException ex)
         {
+            await RecordGateFailureAsync(ParkingConstants.GateActionType.EntryRejected, "ParkingSession", request.SessionId.ToString(), "Entry rejection failed", ex.Message, cancellationToken);
             return BadRequest(ApiResponse<EntryResultDto>.Fail(ex.Message));
         }
     }
@@ -357,7 +363,7 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     [HttpPost("exit/scan")]
     public async Task<ActionResult<ApiResponse<ExitScanResultDto>>> ScanExit([FromBody] ScanExitRequest request, CancellationToken cancellationToken)
     {
-        var data = await service.ScanExitBarcodeAsync(request, cancellationToken);
+        var data = await service.ScanExitBarcodeAsync(StampOperator(request), cancellationToken);
         return Ok(ApiResponse<ExitScanResultDto>.Ok(data, data.Message));
     }
 
@@ -367,11 +373,12 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     {
         try
         {
-            var data = await service.AllowExitAsync(request, cancellationToken);
+            var data = await service.AllowExitAsync(StampOperator(request), cancellationToken);
             return Ok(ApiResponse<ExitResultDto>.Ok(data, "Exit completed."));
         }
         catch (InvalidOperationException ex)
         {
+            await RecordGateFailureAsync(ParkingConstants.GateActionType.ExitAllowed, "ParkingSession", request.SessionId?.ToString() ?? request.BarcodeNo, "Exit failed", ex.Message, cancellationToken);
             return BadRequest(ApiResponse<ExitResultDto>.Fail(ex.Message));
         }
     }
@@ -382,11 +389,12 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     {
         try
         {
-            var data = await service.CollectPaymentAsync(request, cancellationToken);
+            var data = await service.CollectPaymentAsync(StampOperator(request), cancellationToken);
             return Ok(ApiResponse<PaymentResultDto>.Ok(data, "Payment collected."));
         }
         catch (InvalidOperationException ex)
         {
+            await RecordGateFailureAsync(ParkingConstants.GateActionType.PaymentCollected, request.InvoiceId.HasValue ? "ParkingInvoice" : "ParkingPayment", request.InvoiceId?.ToString() ?? request.SessionId?.ToString(), "Payment collection failed", ex.Message, cancellationToken);
             return BadRequest(ApiResponse<PaymentResultDto>.Fail(ex.Message));
         }
     }
@@ -405,7 +413,7 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     {
         try
         {
-            var data = await service.CreateExtraSlotInvoiceAsync(request, cancellationToken);
+            var data = await service.CreateExtraSlotInvoiceAsync(StampOperator(request), cancellationToken);
             return Ok(ApiResponse<ExtraSlotInvoiceResultDto>.Ok(data, "Extra slot invoice created."));
         }
         catch (InvalidOperationException ex)
@@ -528,7 +536,7 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     {
         try
         {
-            var data = await service.CreateInvoiceAsync(request, cancellationToken);
+            var data = await service.CreateInvoiceAsync(StampOperator(request), cancellationToken);
             return Ok(ApiResponse<InvoiceListItemDto>.Ok(data, "Invoice created."));
         }
         catch (InvalidOperationException ex)
@@ -543,7 +551,7 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     {
         try
         {
-            var data = await service.UpdateInvoiceAsync(invoiceId, request, cancellationToken);
+            var data = await service.UpdateInvoiceAsync(invoiceId, StampOperator(request), cancellationToken);
             return Ok(ApiResponse<InvoiceListItemDto>.Ok(data, "Invoice updated."));
         }
         catch (InvalidOperationException ex)
@@ -558,7 +566,7 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     {
         try
         {
-            var data = await service.CancelInvoiceAsync(invoiceId, request, cancellationToken);
+            var data = await service.CancelInvoiceAsync(invoiceId, StampOperator(request), cancellationToken);
             return Ok(ApiResponse<InvoiceListItemDto>.Ok(data, "Invoice cancelled."));
         }
         catch (InvalidOperationException ex)
@@ -698,11 +706,12 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
         {
             request.SessionId = sessionId;
             request.ForceAllow = true;
-            var data = await service.AllowExitAsync(request, cancellationToken);
+            var data = await service.AllowExitAsync(StampOperator(request), cancellationToken);
             return Ok(ApiResponse<ExitResultDto>.Ok(data, "Force exit completed."));
         }
         catch (InvalidOperationException ex)
         {
+            await RecordGateFailureAsync(ParkingConstants.GateActionType.ExitAllowed, "ParkingSession", sessionId.ToString(), "Force exit failed", ex.Message, cancellationToken);
             return BadRequest(ApiResponse<ExitResultDto>.Fail(ex.Message));
         }
     }
@@ -914,11 +923,12 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
     {
         try
         {
-            var data = await service.MarkVehicleBarcodeInvalidAsync(sessionId, request, cancellationToken);
+            var data = await service.MarkVehicleBarcodeInvalidAsync(sessionId, StampOperator(request), cancellationToken);
             return Ok(ApiResponse<VehicleBarcodeDetailDto>.Ok(data, "Barcode marked invalid."));
         }
         catch (InvalidOperationException ex)
         {
+            await RecordGateFailureAsync("BarcodeInvalidated", "ParkingSession", sessionId.ToString(), "Barcode invalidation failed", ex.Message, cancellationToken);
             return BadRequest(ApiResponse<VehicleBarcodeDetailDto>.Fail(ex.Message));
         }
     }
@@ -944,5 +954,26 @@ public sealed class GateOperationsController(IGateOperationService service) : Co
 
         return Ok(ApiResponse<IReadOnlyList<OutsideDisplayDto>>.Ok(data));
 
+    }
+
+    private T StampOperator<T>(T request) where T : class
+    {
+        var operatorId = this.CurrentUserId();
+        var property = typeof(T).GetProperty("OperatorId");
+        if (property is { CanWrite: true } && property.PropertyType == typeof(int))
+            property.SetValue(request, operatorId);
+        return request;
+    }
+
+    private Task RecordGateFailureAsync(string actionKey, string entityType, string? entityId, string title, string message, CancellationToken cancellationToken)
+    {
+        return activityService.RecordAsync(this.BuildActivity(
+            "gate_operation",
+            actionKey,
+            "Failure",
+            entityType,
+            entityId,
+            title,
+            message), cancellationToken);
     }
 }

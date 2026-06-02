@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using NetworldParkingLot.Api.Common;
+using NetworldParkingLot.Api.Common.Security;
+using NetworldParkingLot.Api.Features.SystemActivity.Services;
 using NetworldParkingLot.Api.Features.UserAccess.Dtos;
 using NetworldParkingLot.Api.Features.UserAccess.Filters;
 using NetworldParkingLot.Api.Features.UserAccess.Services;
@@ -10,7 +12,7 @@ namespace NetworldParkingLot.Api.Features.UserAccess.Controllers;
 [Authorize]
 [ApiController]
 [Route("api/access-control")]
-public sealed class AccessControlController(IUserAccessService userAccessService) : ControllerBase
+public sealed class AccessControlController(IUserAccessService userAccessService, ISystemActivityService activityService) : ControllerBase
 {
     [RequireParkingPermission("access_control", "view")]
     [HttpGet("roles")]
@@ -27,10 +29,12 @@ public sealed class AccessControlController(IUserAccessService userAccessService
         try
         {
             var data = await userAccessService.CreateRoleAsync(request, cancellationToken);
+            await RecordAccessActivityAsync("edit", "Success", "AppRole", data.RoleId.ToString(), "Role created", $"Role {data.RoleKey} created.", cancellationToken);
             return Ok(ApiResponse<AccessRoleDto>.Ok(data, "Role created."));
         }
         catch (InvalidOperationException ex)
         {
+            await RecordAccessActivityAsync("edit", "Failure", "AppRole", null, "Role create failed", ex.Message, cancellationToken);
             return BadRequest(ApiResponse<AccessRoleDto>.Fail(ex.Message));
         }
     }
@@ -42,10 +46,12 @@ public sealed class AccessControlController(IUserAccessService userAccessService
         try
         {
             var data = await userAccessService.UpdateRoleAsync(roleId, request, cancellationToken);
+            await RecordAccessActivityAsync("edit", "Success", "AppRole", roleId.ToString(), "Role updated", $"Role {data.RoleKey} updated.", cancellationToken);
             return Ok(ApiResponse<AccessRoleDto>.Ok(data, "Role updated."));
         }
         catch (InvalidOperationException ex)
         {
+            await RecordAccessActivityAsync("edit", "Failure", "AppRole", roleId.ToString(), "Role update failed", ex.Message, cancellationToken);
             return BadRequest(ApiResponse<AccessRoleDto>.Fail(ex.Message));
         }
     }
@@ -65,10 +71,12 @@ public sealed class AccessControlController(IUserAccessService userAccessService
         try
         {
             await userAccessService.SaveRolePermissionsAsync(roleId, request, cancellationToken);
+            await RecordAccessActivityAsync("edit", "Success", "AppRolePermission", roleId.ToString(), "Role permissions saved", "Role permission matrix updated.", cancellationToken);
             return Ok(ApiResponse<object>.Ok(new { success = true }, "Role permissions saved."));
         }
         catch (InvalidOperationException ex)
         {
+            await RecordAccessActivityAsync("edit", "Failure", "AppRolePermission", roleId.ToString(), "Role permissions save failed", ex.Message, cancellationToken);
             return BadRequest(ApiResponse<object>.Fail(ex.Message));
         }
     }
@@ -100,10 +108,12 @@ public sealed class AccessControlController(IUserAccessService userAccessService
         try
         {
             await userAccessService.SaveUserRolesAsync(userId, request, cancellationToken);
+            await RecordAccessActivityAsync("edit", "Success", "AppUserRole", userId.ToString(), "User roles saved", "User role assignments updated.", cancellationToken);
             return Ok(ApiResponse<object>.Ok(new { success = true }, "User roles saved."));
         }
         catch (InvalidOperationException ex)
         {
+            await RecordAccessActivityAsync("edit", "Failure", "AppUserRole", userId.ToString(), "User roles save failed", ex.Message, cancellationToken);
             return BadRequest(ApiResponse<object>.Fail(ex.Message));
         }
     }
@@ -123,11 +133,25 @@ public sealed class AccessControlController(IUserAccessService userAccessService
         try
         {
             await userAccessService.SaveUserPermissionsAsync(userId, request, cancellationToken);
+            await RecordAccessActivityAsync("edit", "Success", "AppUserPermission", userId.ToString(), "User permission overrides saved", "User permission overrides updated.", cancellationToken);
             return Ok(ApiResponse<object>.Ok(new { success = true }, "User permission overrides saved."));
         }
         catch (InvalidOperationException ex)
         {
+            await RecordAccessActivityAsync("edit", "Failure", "AppUserPermission", userId.ToString(), "User permission overrides save failed", ex.Message, cancellationToken);
             return BadRequest(ApiResponse<object>.Fail(ex.Message));
         }
+    }
+
+    private Task RecordAccessActivityAsync(string actionKey, string result, string entityType, string? entityId, string title, string? message, CancellationToken cancellationToken)
+    {
+        return activityService.RecordAsync(this.BuildActivity(
+            "access_control",
+            actionKey,
+            result,
+            entityType,
+            entityId,
+            title,
+            message), cancellationToken);
     }
 }

@@ -6,6 +6,7 @@ using NetworldParkingLot.Api.Domain.Constants;
 using NetworldParkingLot.Api.Domain.Entities;
 using NetworldParkingLot.Api.Features.GateOperations.Dtos;
 using NetworldParkingLot.Api.Features.GateOperations.Repositories;
+using NetworldParkingLot.Api.Features.SystemActivity.Services;
 
 namespace NetworldParkingLot.Api.Features.GateOperations.Services;
 
@@ -445,6 +446,29 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             normalizedStatus,
             cancellationToken);
 
+        var changes = new List<SystemActivityChange>
+        {
+            new("PlanType", subscription.PlanType, planType),
+            new("SlotsPurchased", AuditValue(subscription.SlotsPurchased), AuditValue(request.SlotsPurchased)),
+            new("RatePerSlot", AuditValue(subscription.RatePerSlot), AuditValue(ratePerSlot)),
+            new("StartDate", AuditValue(subscription.StartDate), AuditValue(startDate)),
+            new("EndDate", AuditValue(subscription.EndDate), AuditValue(endDate)),
+            new("DiscountAmount", AuditValue(subscription.DiscountAmount), AuditValue(request.DiscountAmount)),
+            new("VatAmount", AuditValue(subscription.VatAmount), AuditValue(request.VatAmount)),
+            new("TotalAmount", AuditValue(subscription.TotalAmount), AuditValue(total)),
+            new("BalanceAmount", AuditValue(subscription.BalanceAmount), AuditValue(total - paid)),
+            new("IsExtraSlot", AuditValue(subscription.IsExtraSlot), AuditValue(request.IsExtraSlot)),
+            new("Status", subscription.Status, normalizedStatus),
+            new("Remarks", subscription.Remarks, TrimOrNull(request.Remarks))
+        };
+
+        if (invoice != null)
+        {
+            changes.Add(new("InvoiceType", invoice.InvoiceType, request.IsExtraSlot ? "ExtraSlot" : "Subscription"));
+            changes.Add(new("InvoiceBalanceAmount", AuditValue(invoice.BalanceAmount), AuditValue(total - paid)));
+            changes.Add(new("InvoiceStatus", invoice.Status, GetInvoiceStatus(total - paid, paid)));
+        }
+
         subscription.PlanType = planType;
         subscription.SlotsPurchased = request.SlotsPurchased;
         subscription.RatePerSlot = ratePerSlot;
@@ -477,7 +501,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             invoice.Remarks = TrimOrNull(request.Remarks);
         }
 
-        await AddActivityAsync("SubscriptionUpdated", subscription.CompanyId, null, null, null, "Subscription Updated", $"Subscription {subscription.SubscriptionId} updated.", request.OperatorId, cancellationToken);
+        await AddActivityAsync("SubscriptionUpdated", subscription.CompanyId, null, null, null, "Subscription Updated", $"Subscription {subscription.SubscriptionId} updated.", request.OperatorId, cancellationToken, changes, "ParkingSubscription", subscription.SubscriptionId.ToString());
         await db.SaveChangesAsync(cancellationToken);
         await ReassignInsideSessionsToActiveSubscriptionsAsync(subscription.CompanyId, request.OperatorId, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -493,6 +517,9 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (hasVehiclesInside)
             throw new InvalidOperationException("Cannot cancel subscription while vehicles are still inside using this subscription.");
 
+        var oldStatus = subscription.Status;
+        var oldBalanceAmount = subscription.BalanceAmount;
+
         subscription.Status = ParkingConstants.SubscriptionStatus.Cancelled;
         subscription.CancelledBy = request.OperatorId;
         subscription.CancelledDate = DateTime.Now;
@@ -501,6 +528,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         subscription.ModifiedDate = DateTime.Now;
 
         var invoice = await GetSubscriptionInvoiceForUpdateAsync(subscription.SubscriptionId, cancellationToken);
+        var oldInvoiceStatus = invoice?.Status;
+        var oldInvoiceBalanceAmount = invoice?.BalanceAmount;
         if (request.ClearPendingInvoiceBalance && invoice != null && invoice.BalanceAmount > 0)
         {
             invoice.BalanceAmount = 0;
@@ -509,7 +538,19 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             subscription.BalanceAmount = 0;
         }
 
-        await AddActivityAsync("SubscriptionCancelled", subscription.CompanyId, null, null, null, "Subscription Cancelled", request.Reason, request.OperatorId, cancellationToken);
+        var changes = new List<SystemActivityChange>
+        {
+            new("Status", oldStatus, subscription.Status),
+            new("BalanceAmount", AuditValue(oldBalanceAmount), AuditValue(subscription.BalanceAmount)),
+            new("CancellationReason", null, subscription.CancellationReason)
+        };
+        if (invoice != null)
+        {
+            changes.Add(new("InvoiceStatus", oldInvoiceStatus, invoice.Status));
+            changes.Add(new("InvoiceBalanceAmount", AuditValue(oldInvoiceBalanceAmount), AuditValue(invoice.BalanceAmount)));
+        }
+
+        await AddActivityAsync("SubscriptionCancelled", subscription.CompanyId, null, null, null, "Subscription Cancelled", request.Reason, request.OperatorId, cancellationToken, changes, "ParkingSubscription", subscription.SubscriptionId.ToString());
         await db.SaveChangesAsync(cancellationToken);
         return await GetSubscriptionByIdAsync(subscription.SubscriptionId, cancellationToken);
     }
@@ -908,12 +949,23 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
         await EnsureParkingCapacityAvailableAsync(cancellationToken);
 
+        var oldStatus = session.Status;
+        var oldBarcodeStatus = session.BarcodeStatus;
+        var oldEntryTime = session.EntryTime;
+        var oldEntryOperatorId = session.EntryOperatorId;
+
         session.EntryTime = DateTime.Now;
         session.Status = ParkingConstants.SessionStatus.Inside;
         session.BarcodeStatus = ParkingConstants.BarcodeStatus.Active;
         session.EntryOperatorId = request.OperatorId;
 
-        await AddActivityAsync(ParkingConstants.GateActionType.EntryAllowed, session.CompanyId, session.SessionId, session.BarcodeNo, session.PlateNo, "Entry Allowed", "Vehicle entry allowed successfully.", request.OperatorId, cancellationToken);
+        await AddActivityAsync(ParkingConstants.GateActionType.EntryAllowed, session.CompanyId, session.SessionId, session.BarcodeNo, session.PlateNo, "Entry Allowed", "Vehicle entry allowed successfully.", request.OperatorId, cancellationToken, new List<SystemActivityChange>
+        {
+            new("Status", oldStatus, session.Status),
+            new("BarcodeStatus", oldBarcodeStatus, session.BarcodeStatus),
+            new("EntryTime", AuditValue(oldEntryTime), AuditValue(session.EntryTime)),
+            new("EntryOperatorId", AuditValue(oldEntryOperatorId), AuditValue(session.EntryOperatorId))
+        });
         await AddOutsideDisplayAsync(session, ParkingConstants.OutsideDisplayStatus.EntryAllowed, "ENTRY ALLOWED", "Please proceed inside.", 0, 0, cancellationToken);
         await repository.SaveChangesAsync(cancellationToken);
 
@@ -928,11 +980,20 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (session.Status == ParkingConstants.SessionStatus.Inside)
             throw new InvalidOperationException("Cannot reject. Vehicle is already inside.");
 
+        var oldStatus = session.Status;
+        var oldBarcodeStatus = session.BarcodeStatus;
+        var oldRemarks = session.Remarks;
+
         session.Status = ParkingConstants.SessionStatus.Rejected;
         session.BarcodeStatus = ParkingConstants.BarcodeStatus.Invalid;
         session.Remarks = AppendRemarks(session.Remarks, "Rejected: " + request.Reason);
 
-        await AddActivityAsync(ParkingConstants.GateActionType.EntryRejected, session.CompanyId, session.SessionId, session.BarcodeNo, session.PlateNo, "Entry Rejected", request.Reason ?? "Entry rejected.", request.OperatorId, cancellationToken);
+        await AddActivityAsync(ParkingConstants.GateActionType.EntryRejected, session.CompanyId, session.SessionId, session.BarcodeNo, session.PlateNo, "Entry Rejected", request.Reason ?? "Entry rejected.", request.OperatorId, cancellationToken, new List<SystemActivityChange>
+        {
+            new("Status", oldStatus, session.Status),
+            new("BarcodeStatus", oldBarcodeStatus, session.BarcodeStatus),
+            new("Remarks", oldRemarks, session.Remarks)
+        });
         await repository.SaveChangesAsync(cancellationToken);
 
         return new EntryResultDto(session.SessionId, session.BarcodeNo, session.PlateNo, session.Company.CompanyName, DateTime.Now, session.Status, "Entry rejected and barcode invalidated.");
@@ -966,6 +1027,15 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (scan.TotalPayable > 0 && request.ForceAllow && string.IsNullOrWhiteSpace(request.ForceReason))
             throw new InvalidOperationException("Force exit reason is required.");
 
+        var oldStatus = session.Status;
+        var oldBarcodeStatus = session.BarcodeStatus;
+        var oldExitTime = session.ExitTime;
+        var oldExitOperatorId = session.ExitOperatorId;
+        var oldForceExit = session.ForceExit;
+        var oldForceExitReason = session.ForceExitReason;
+        var oldOverstayDays = session.OverstayDays;
+        var oldOverstayAmount = session.OverstayAmount;
+
         session.ExitTime = DateTime.Now;
         session.ExitOperatorId = request.OperatorId;
         session.Status = ParkingConstants.SessionStatus.Exited;
@@ -976,7 +1046,17 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         session.OverstayAmount = scan.OverstayAmount;
 
         var status = session.ForceExit ? "Exit Allowed With Warning" : "Clear To Exit";
-        await AddActivityAsync(ParkingConstants.GateActionType.ExitAllowed, session.CompanyId, session.SessionId, session.BarcodeNo, session.PlateNo, status, status, request.OperatorId, cancellationToken);
+        await AddActivityAsync(ParkingConstants.GateActionType.ExitAllowed, session.CompanyId, session.SessionId, session.BarcodeNo, session.PlateNo, status, status, request.OperatorId, cancellationToken, new List<SystemActivityChange>
+        {
+            new("Status", oldStatus, session.Status),
+            new("BarcodeStatus", oldBarcodeStatus, session.BarcodeStatus),
+            new("ExitTime", AuditValue(oldExitTime), AuditValue(session.ExitTime)),
+            new("ExitOperatorId", AuditValue(oldExitOperatorId), AuditValue(session.ExitOperatorId)),
+            new("ForceExit", AuditValue(oldForceExit), AuditValue(session.ForceExit)),
+            new("ForceExitReason", oldForceExitReason, session.ForceExitReason),
+            new("OverstayDays", AuditValue(oldOverstayDays), AuditValue(session.OverstayDays)),
+            new("OverstayAmount", AuditValue(oldOverstayAmount), AuditValue(session.OverstayAmount))
+        });
         await AddOutsideDisplayAsync(session, ParkingConstants.OutsideDisplayStatus.ClearToExit, "CLEAR TO EXIT", "Thank you. Please proceed.", 0, 0, cancellationToken);
         await repository.SaveChangesAsync(cancellationToken);
 
@@ -996,6 +1076,9 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         decimal currentPending;
         string? paidInvoiceNo = null;
         decimal? invoiceBalanceAfterPayment = null;
+        decimal? invoiceBalanceBeforePayment = null;
+        string? invoiceStatusBeforePayment = null;
+        string? invoiceStatusAfterPayment = null;
 
         if (request.InvoiceId.HasValue)
         {
@@ -1004,6 +1087,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                 ?? throw new InvalidOperationException("Invoice not found.");
 
             currentPending = invoice.BalanceAmount;
+            invoiceBalanceBeforePayment = invoice.BalanceAmount;
+            invoiceStatusBeforePayment = invoice.Status;
 
             if (currentPending <= 0)
                 throw new InvalidOperationException("No pending amount found for this invoice.");
@@ -1014,6 +1099,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             ApplyAmountToInvoice(invoice, request.Amount);
             paidInvoiceNo = invoice.InvoiceNo;
             invoiceBalanceAfterPayment = invoice.BalanceAmount;
+            invoiceStatusAfterPayment = invoice.Status;
         }
         else
         {
@@ -1046,7 +1132,22 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         };
 
         await db.ParkingPayments.AddAsync(payment, cancellationToken);
-        await AddActivityAsync(ParkingConstants.GateActionType.PaymentCollected, company.CompanyId, request.SessionId, null, null, "Payment Collected", $"Received AED {request.Amount:n2}", request.OperatorId, cancellationToken);
+        var paymentChanges = new List<SystemActivityChange>
+        {
+            new("ReceiptNo", null, receiptNo),
+            new("Amount", null, AuditValue(request.Amount)),
+            new("PaymentMode", null, payment.PaymentMode),
+            new("ReferenceNo", null, payment.ReferenceNo),
+            new("CurrentPendingAmount", AuditValue(currentPending), null)
+        };
+        if (request.InvoiceId.HasValue)
+        {
+            paymentChanges.Add(new("InvoiceId", null, AuditValue(request.InvoiceId)));
+            paymentChanges.Add(new("InvoiceBalanceAmount", AuditValue(invoiceBalanceBeforePayment), AuditValue(invoiceBalanceAfterPayment)));
+            paymentChanges.Add(new("InvoiceStatus", invoiceStatusBeforePayment, invoiceStatusAfterPayment));
+        }
+
+        await AddActivityAsync(ParkingConstants.GateActionType.PaymentCollected, company.CompanyId, request.SessionId, null, null, "Payment Collected", $"Received AED {request.Amount:n2}", request.OperatorId, cancellationToken, paymentChanges, "ParkingPayment", receiptNo);
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
@@ -1065,6 +1166,14 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                 var scan = await BuildExitScanResultAsync(session.BarcodeNo, request.OperatorId, false, cancellationToken);
                 if (scan.IsValid && scan.TotalPayable <= 0)
                 {
+                    var oldStatus = session.Status;
+                    var oldBarcodeStatus = session.BarcodeStatus;
+                    var oldExitTime = session.ExitTime;
+                    var oldExitOperatorId = session.ExitOperatorId;
+                    var oldForceExit = session.ForceExit;
+                    var oldOverstayDays = session.OverstayDays;
+                    var oldOverstayAmount = session.OverstayAmount;
+
                     session.ExitTime = DateTime.Now;
                     session.ExitOperatorId = request.OperatorId;
                     session.Status = ParkingConstants.SessionStatus.Exited;
@@ -1083,7 +1192,17 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                         "Paid And Exited",
                         "Payment collected and exit completed.",
                         request.OperatorId,
-                        cancellationToken);
+                        cancellationToken,
+                        new List<SystemActivityChange>
+                        {
+                            new("Status", oldStatus, session.Status),
+                            new("BarcodeStatus", oldBarcodeStatus, session.BarcodeStatus),
+                            new("ExitTime", AuditValue(oldExitTime), AuditValue(session.ExitTime)),
+                            new("ExitOperatorId", AuditValue(oldExitOperatorId), AuditValue(session.ExitOperatorId)),
+                            new("ForceExit", AuditValue(oldForceExit), AuditValue(session.ForceExit)),
+                            new("OverstayDays", AuditValue(oldOverstayDays), AuditValue(session.OverstayDays)),
+                            new("OverstayAmount", AuditValue(oldOverstayAmount), AuditValue(session.OverstayAmount))
+                        });
 
                     await AddOutsideDisplayAsync(
                         session,
@@ -1392,22 +1511,45 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (total < invoice.PaidAmount)
             throw new InvalidOperationException($"Invoice total cannot be less than already paid amount AED {invoice.PaidAmount:n2}.");
 
-        invoice.InvoiceType = NormalizeInvoiceType(request.InvoiceType);
-        invoice.InvoiceDate = request.InvoiceDate == default ? invoice.InvoiceDate : request.InvoiceDate;
+        var newInvoiceType = NormalizeInvoiceType(request.InvoiceType);
+        var newInvoiceDate = request.InvoiceDate == default ? invoice.InvoiceDate : request.InvoiceDate;
+        var newPlanType = TrimOrNull(request.PlanType);
+        var newSlots = Math.Max(request.Slots, 0);
+        var newBalance = total - invoice.PaidAmount;
+        var newStatus = GetInvoiceStatus(newBalance, invoice.PaidAmount);
+        var newRemarks = TrimOrNull(request.Remarks);
+        var changes = new List<SystemActivityChange>
+        {
+            new("InvoiceType", invoice.InvoiceType, newInvoiceType),
+            new("InvoiceDate", AuditValue(invoice.InvoiceDate), AuditValue(newInvoiceDate)),
+            new("DueDate", AuditValue(invoice.DueDate), AuditValue(request.DueDate)),
+            new("PlanType", invoice.PlanType, newPlanType),
+            new("Slots", AuditValue(invoice.Slots), AuditValue(newSlots)),
+            new("SubTotal", AuditValue(invoice.SubTotal), AuditValue(subTotal)),
+            new("DiscountAmount", AuditValue(invoice.DiscountAmount), AuditValue(discount)),
+            new("VatAmount", AuditValue(invoice.VatAmount), AuditValue(vat)),
+            new("TotalAmount", AuditValue(invoice.TotalAmount), AuditValue(total)),
+            new("BalanceAmount", AuditValue(invoice.BalanceAmount), AuditValue(newBalance)),
+            new("Status", invoice.Status, newStatus),
+            new("Remarks", invoice.Remarks, newRemarks)
+        };
+
+        invoice.InvoiceType = newInvoiceType;
+        invoice.InvoiceDate = newInvoiceDate;
         invoice.DueDate = request.DueDate;
-        invoice.PlanType = TrimOrNull(request.PlanType);
-        invoice.Slots = Math.Max(request.Slots, 0);
+        invoice.PlanType = newPlanType;
+        invoice.Slots = newSlots;
         invoice.SubTotal = subTotal;
         invoice.DiscountAmount = discount;
         invoice.VatAmount = vat;
         invoice.TotalAmount = total;
-        invoice.BalanceAmount = total - invoice.PaidAmount;
-        invoice.Status = GetInvoiceStatus(invoice.BalanceAmount, invoice.PaidAmount);
-        invoice.Remarks = TrimOrNull(request.Remarks);
+        invoice.BalanceAmount = newBalance;
+        invoice.Status = newStatus;
+        invoice.Remarks = newRemarks;
         invoice.ModifiedDate = DateTime.Now;
         invoice.ModifiedBy = request.OperatorId;
 
-        await AddActivityAsync("InvoiceUpdated", invoice.CompanyId, invoice.SessionId, null, null, "Invoice Updated", $"Invoice {invoice.InvoiceNo} updated.", request.OperatorId, cancellationToken);
+        await AddActivityAsync("InvoiceUpdated", invoice.CompanyId, invoice.SessionId, null, null, "Invoice Updated", $"Invoice {invoice.InvoiceNo} updated.", request.OperatorId, cancellationToken, changes, "ParkingInvoice", invoice.InvoiceId.ToString());
         await db.SaveChangesAsync(cancellationToken);
         return ToInvoiceListItem(invoice);
     }
@@ -1423,6 +1565,11 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (invoice.PaidAmount > 0 && !request.ClearPendingBalance)
             throw new InvalidOperationException("Invoice has payment history. Enable clear pending balance to cancel it without deleting old payments.");
 
+        var oldStatus = invoice.Status;
+        var oldBalanceAmount = invoice.BalanceAmount;
+        var oldCancellationReason = invoice.CancellationReason;
+        var oldRemarks = invoice.Remarks;
+
         invoice.Status = "Cancelled";
         if (request.ClearPendingBalance)
             invoice.BalanceAmount = 0;
@@ -1433,7 +1580,13 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         invoice.ModifiedBy = request.OperatorId;
         invoice.Remarks = AppendRemarks(invoice.Remarks, "Cancelled: " + invoice.CancellationReason);
 
-        await AddActivityAsync("InvoiceCancelled", invoice.CompanyId, invoice.SessionId, null, null, "Invoice Cancelled", $"Invoice {invoice.InvoiceNo} cancelled. {invoice.CancellationReason}", request.OperatorId, cancellationToken);
+        await AddActivityAsync("InvoiceCancelled", invoice.CompanyId, invoice.SessionId, null, null, "Invoice Cancelled", $"Invoice {invoice.InvoiceNo} cancelled. {invoice.CancellationReason}", request.OperatorId, cancellationToken, new List<SystemActivityChange>
+        {
+            new("Status", oldStatus, invoice.Status),
+            new("BalanceAmount", AuditValue(oldBalanceAmount), AuditValue(invoice.BalanceAmount)),
+            new("CancellationReason", oldCancellationReason, invoice.CancellationReason),
+            new("Remarks", oldRemarks, invoice.Remarks)
+        }, "ParkingInvoice", invoice.InvoiceId.ToString());
         await db.SaveChangesAsync(cancellationToken);
         return ToInvoiceListItem(invoice);
     }
@@ -1724,11 +1877,20 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (string.IsNullOrWhiteSpace(request.Reason))
             throw new InvalidOperationException("Invalidation reason is required.");
 
+        var oldStatus = session.Status;
+        var oldBarcodeStatus = session.BarcodeStatus;
+        var oldRemarks = session.Remarks;
+
         session.Status = ParkingConstants.SessionStatus.Cancelled;
         session.BarcodeStatus = ParkingConstants.BarcodeStatus.Invalid;
         session.Remarks = AppendRemarks(session.Remarks, "Invalidated: " + request.Reason.Trim());
 
-        await AddActivityAsync("BarcodeInvalidated", session.CompanyId, session.SessionId, session.BarcodeNo, session.PlateNo, "Barcode Invalidated", request.Reason.Trim(), request.OperatorId, cancellationToken);
+        await AddActivityAsync("BarcodeInvalidated", session.CompanyId, session.SessionId, session.BarcodeNo, session.PlateNo, "Barcode Invalidated", request.Reason.Trim(), request.OperatorId, cancellationToken, new List<SystemActivityChange>
+        {
+            new("Status", oldStatus, session.Status),
+            new("BarcodeStatus", oldBarcodeStatus, session.BarcodeStatus),
+            new("Remarks", oldRemarks, session.Remarks)
+        });
         await repository.SaveChangesAsync(cancellationToken);
 
         return await GetVehicleBarcodeDetailAsync(sessionId, cancellationToken);
@@ -2308,7 +2470,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             if (saveDisplayEvent)
             {
                 await AddOutsideDisplayAsync(session, ParkingConstants.OutsideDisplayStatus.InvalidBarcode, "INVALID BARCODE", "Barcode already used. Please contact staff.", 0, 0, cancellationToken);
-                await AddActivityAsync(ParkingConstants.GateActionType.ExitScanned, session.CompanyId, session.SessionId, session.BarcodeNo, session.PlateNo, ParkingConstants.ExitStatus.AlreadyExited, "Barcode already used. Vehicle has already exited.", operatorId, cancellationToken);
+                await AddActivityAsync(ParkingConstants.GateActionType.ExitScanned, session.CompanyId, session.SessionId, session.BarcodeNo, session.PlateNo, ParkingConstants.ExitStatus.AlreadyExited, "Barcode already used. Vehicle has already exited.", operatorId, cancellationToken, result: "Failure");
                 await repository.SaveChangesAsync(cancellationToken);
             }
             return invalid;
@@ -2320,7 +2482,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             if (saveDisplayEvent)
             {
                 await AddOutsideDisplayAsync(session, ParkingConstants.OutsideDisplayStatus.InvalidBarcode, "INVALID BARCODE", "Barcode is not active for exit.", 0, 0, cancellationToken);
-                await AddActivityAsync(ParkingConstants.GateActionType.ExitScanned, session.CompanyId, session.SessionId, session.BarcodeNo, session.PlateNo, ParkingConstants.ExitStatus.InvalidBarcode, "Barcode is not active for exit.", operatorId, cancellationToken);
+                await AddActivityAsync(ParkingConstants.GateActionType.ExitScanned, session.CompanyId, session.SessionId, session.BarcodeNo, session.PlateNo, ParkingConstants.ExitStatus.InvalidBarcode, "Barcode is not active for exit.", operatorId, cancellationToken, result: "Failure");
                 await repository.SaveChangesAsync(cancellationToken);
             }
             return invalid;
@@ -2514,7 +2676,20 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         return prefix + "-" + DateTime.Now.ToString("yyMMdd") + "-" + counter.LastNumber.ToString("D5");
     }
 
-    private async Task AddActivityAsync(string actionType, int? companyId, int? sessionId, string? barcodeNo, string? plateNo, string status, string? message, int operatorId, CancellationToken cancellationToken)
+    private async Task AddActivityAsync(
+        string actionType,
+        int? companyId,
+        int? sessionId,
+        string? barcodeNo,
+        string? plateNo,
+        string status,
+        string? message,
+        int operatorId,
+        CancellationToken cancellationToken,
+        IReadOnlyList<SystemActivityChange>? changes = null,
+        string entityType = "GateActivity",
+        string? entityId = null,
+        string result = "Success")
     {
         await repository.AddActivityAsync(new GateActivityLog
         {
@@ -2528,6 +2703,83 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             OperatorId = operatorId,
             ActionDate = DateTime.Now
         }, cancellationToken);
+
+        var userDisplayName = await ResolveOperatorDisplayNameAsync(operatorId, cancellationToken);
+        var log = new Domain.Entities.SystemActivityLog
+        {
+            ActivityDate = DateTime.Now,
+            UserId = operatorId > 0 ? operatorId : null,
+            Username = userDisplayName,
+            ModuleKey = "gate_operation",
+            ActionKey = actionType,
+            Result = string.IsNullOrWhiteSpace(result) ? "Success" : result,
+            EntityType = entityType,
+            EntityId = entityId ?? sessionId?.ToString() ?? companyId?.ToString(),
+            Title = status,
+            Message = message
+        };
+
+        foreach (var change in changes ?? [])
+        {
+            if (string.Equals(change.OldValue, change.NewValue, StringComparison.Ordinal))
+                continue;
+
+            log.Details.Add(new Domain.Entities.SystemActivityLogDetail
+            {
+                FieldName = TrimAuditValue(change.FieldName, 150) ?? "-",
+                OldValue = TrimAuditValue(change.OldValue, 2000),
+                NewValue = TrimAuditValue(change.NewValue, 2000)
+            });
+        }
+
+        await db.SystemActivityLogs.AddAsync(log, cancellationToken);
+    }
+
+    private async Task<string> ResolveOperatorDisplayNameAsync(int operatorId, CancellationToken cancellationToken)
+    {
+        if (operatorId <= 0)
+            return "-";
+
+        var user = await db.AppUsers
+            .AsNoTracking()
+            .Where(x => x.UserId == operatorId)
+            .Select(x => new { x.FullName, x.Username })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (user == null)
+            return $"User #{operatorId}";
+
+        if (!string.IsNullOrWhiteSpace(user.FullName))
+            return user.FullName.Trim();
+
+        if (!string.IsNullOrWhiteSpace(user.Username))
+            return user.Username.Trim();
+
+        return $"User #{operatorId}";
+    }
+
+    private static string? AuditValue(object? value)
+    {
+        return value switch
+        {
+            null => null,
+            DateTime date => date.ToString("yyyy-MM-dd HH:mm:ss"),
+            DateTimeOffset date => date.ToString("yyyy-MM-dd HH:mm:ss zzz"),
+            decimal amount => amount.ToString("0.##"),
+            double number => number.ToString("0.##"),
+            float number => number.ToString("0.##"),
+            bool flag => flag ? "Yes" : "No",
+            _ => value.ToString()
+        };
+    }
+
+    private static string? TrimAuditValue(string? value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var clean = value.Trim();
+        return clean.Length <= maxLength ? clean : clean[..maxLength];
     }
 
     private async Task AddOutsideDisplayAsync(ParkingSession session, string displayStatus, string mainMessage, string? subMessage, decimal amountDue, int overstayDays, CancellationToken cancellationToken)
@@ -2568,7 +2820,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             }, cancellationToken);
         }
 
-        await AddActivityAsync(ParkingConstants.GateActionType.ExitScanned, null, null, barcodeNo, null, ParkingConstants.ExitStatus.InvalidBarcode, subMessage, operatorId, cancellationToken);
+        await AddActivityAsync(ParkingConstants.GateActionType.ExitScanned, null, null, barcodeNo, null, ParkingConstants.ExitStatus.InvalidBarcode, subMessage, operatorId, cancellationToken, result: "Failure");
         await repository.SaveChangesAsync(cancellationToken);
     }
 

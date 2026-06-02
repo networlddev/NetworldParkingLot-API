@@ -33,7 +33,6 @@ public sealed class GenerateBarcodeRequest
 
     public bool AllowPaymentDueWarning { get; set; }
 
-    [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
 
@@ -44,7 +43,6 @@ public sealed class AllowEntryRequest
 
     public bool AllowPaymentDueWarning { get; set; }
 
-    [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
 
@@ -53,7 +51,6 @@ public sealed class RejectEntryRequest
     [Range(1, int.MaxValue)]
     public int SessionId { get; set; }
 
-    [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 
     public string? Reason { get; set; }
@@ -64,7 +61,6 @@ public sealed class ScanExitRequest
     [Required]
     public string BarcodeNo { get; set; } = string.Empty;
 
-    [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
 
@@ -75,7 +71,6 @@ public sealed class AllowExitRequest
     public bool ForceAllow { get; set; }
     public string? ForceReason { get; set; }
 
-    [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
 
@@ -97,7 +92,6 @@ public sealed class CollectPaymentRequest
     public string? Remarks { get; set; }
     public bool SavePaymentAndAllowExit { get; set; }
 
-    [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
 
@@ -124,7 +118,6 @@ public sealed class CreateExtraSlotInvoiceRequest
     public string? ReferenceNo { get; set; }
     public string? Remarks { get; set; }
 
-    [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
 
@@ -190,7 +183,6 @@ public sealed class CreateCompanyWithSubscriptionRequest
     public string PaymentMode { get; set; } = "Cash";
     public string? ReferenceNo { get; set; }
 
-    [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
 
@@ -227,7 +219,6 @@ public sealed class UpdateCompanyRequest
     public string? Remarks { get; set; }
     public string? InternalNotes { get; set; }
 
-    [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
 
@@ -272,7 +263,6 @@ public sealed class CreateSubscriptionRequest
     public string? ReferenceNo { get; set; }
     public string? Remarks { get; set; }
 
-    [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
 
@@ -292,7 +282,6 @@ public sealed class UpdateSubscriptionRequest
     public string Status { get; set; } = "Active";
     public string? Remarks { get; set; }
 
-    [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
 
@@ -301,7 +290,6 @@ public sealed class CancelSubscriptionRequest
     public string? Reason { get; set; }
     public bool ClearPendingInvoiceBalance { get; set; }
 
-    [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
 
@@ -318,7 +306,6 @@ public sealed class RenewSubscriptionRequest
     public string? ReferenceNo { get; set; }
     public string? Remarks { get; set; }
 
-    [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
 
@@ -385,7 +372,6 @@ public sealed class MarkBarcodeInvalidRequest
     [MaxLength(500)]
     public string Reason { get; set; } = string.Empty;
 
-    [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
 
@@ -445,7 +431,6 @@ public sealed class CreateInvoiceRequest
     public string? ReferenceNo { get; set; }
     public string? Remarks { get; set; }
 
-    [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
 
@@ -475,7 +460,6 @@ public sealed class UpdateInvoiceRequest
 
     public string? Remarks { get; set; }
 
-    [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }
 
@@ -484,6 +468,5 @@ public sealed class CancelInvoiceRequest
     public string? Reason { get; set; }
     public bool ClearPendingBalance { get; set; } = true;
 
-    [Range(1, int.MaxValue)]
     public int OperatorId { get; set; }
 }

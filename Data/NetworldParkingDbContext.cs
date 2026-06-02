@@ -21,6 +21,8 @@ public sealed class NetworldParkingDbContext(DbContextOptions<NetworldParkingDbC
     public DbSet<OutsideDisplayEvent> OutsideDisplayEvents => Set<OutsideDisplayEvent>();
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
     public DbSet<SystemCounter> SystemCounters => Set<SystemCounter>();
+    public DbSet<SystemActivityLog> SystemActivityLogs => Set<SystemActivityLog>();
+    public DbSet<SystemActivityLogDetail> SystemActivityLogDetails => Set<SystemActivityLogDetail>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -129,5 +131,15 @@ public sealed class NetworldParkingDbContext(DbContextOptions<NetworldParkingDbC
 
         modelBuilder.Entity<SystemCounter>().HasKey(x => x.SystemCounterId);
         modelBuilder.Entity<SystemCounter>().HasIndex(x => x.CounterName).IsUnique();
+
+        modelBuilder.Entity<SystemActivityLog>().HasKey(x => x.SystemActivityLogId);
+        modelBuilder.Entity<SystemActivityLog>().HasIndex(x => new { x.ActivityDate, x.ModuleKey });
+        modelBuilder.Entity<SystemActivityLog>().HasIndex(x => new { x.UserId, x.ActivityDate });
+
+        modelBuilder.Entity<SystemActivityLogDetail>().HasKey(x => x.SystemActivityLogDetailId);
+        modelBuilder.Entity<SystemActivityLogDetail>()
+            .HasOne(x => x.ActivityLog)
+            .WithMany(x => x.Details)
+            .HasForeignKey(x => x.SystemActivityLogId);
     }
 }

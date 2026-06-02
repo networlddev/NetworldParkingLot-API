@@ -3,10 +3,11 @@ using Microsoft.EntityFrameworkCore;
 using NetworldParkingLot.Api.Data;
 using NetworldParkingLot.Api.Domain.Entities;
 using NetworldParkingLot.Api.Features.Settings.Dtos;
+using NetworldParkingLot.Api.Features.SystemActivity.Services;
 
 namespace NetworldParkingLot.Api.Features.Settings.Services;
 
-public sealed class SettingsService(NetworldParkingDbContext db) : ISettingsService
+public sealed class SettingsService(NetworldParkingDbContext db, ISystemActivityService activityService) : ISettingsService
 {
     private static readonly IReadOnlyList<SettingsOptionDto> BarcodeSymbologyOptions =
     [
@@ -54,16 +55,20 @@ public sealed class SettingsService(NetworldParkingDbContext db) : ISettingsServ
             .Where(x => keys.Contains(x.SettingKey))
             .ToListAsync(cancellationToken);
         var existing = existingRows.ToDictionary(x => x.SettingKey, StringComparer.OrdinalIgnoreCase);
+        var changes = new List<SystemActivityChange>();
 
         foreach (var pair in values)
         {
             if (existing.TryGetValue(pair.Key, out var row))
             {
+                if (!string.Equals(row.SettingValue, pair.Value.Value, StringComparison.Ordinal))
+                    changes.Add(new SystemActivityChange(pair.Key, row.SettingValue, pair.Value.Value));
                 row.SettingValue = pair.Value.Value;
                 row.Remarks = pair.Value.Remarks;
             }
             else
             {
+                changes.Add(new SystemActivityChange(pair.Key, null, pair.Value.Value));
                 await db.SystemSettings.AddAsync(new SystemSetting
                 {
                     SettingKey = pair.Key,
@@ -74,6 +79,23 @@ public sealed class SettingsService(NetworldParkingDbContext db) : ISettingsServ
         }
 
         await db.SaveChangesAsync(cancellationToken);
+        if (changes.Count > 0)
+        {
+            await activityService.RecordAsync(new SystemActivityRequest(
+                operatorId,
+                operatorId > 0 ? $"User #{operatorId}" : "-",
+                "settings",
+                "edit",
+                "Success",
+                "SystemSettings",
+                null,
+                "Settings updated",
+                $"{changes.Count} setting value(s) changed.",
+                null,
+                null,
+                null,
+                changes), cancellationToken);
+        }
         return await GetSettingsAsync(cancellationToken);
     }
 
