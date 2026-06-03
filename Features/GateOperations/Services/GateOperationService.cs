@@ -155,7 +155,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (total < 0)
             throw new InvalidOperationException("Invoice total cannot be negative.");
 
-        var paid = Math.Min(Math.Max(request.PaidAmount, 0), total);
+        var paid = ValidateInitialPaidAmount(request.PaidAmount, total);
         var balance = total - paid;
 
         var company = new ParkingCompany
@@ -241,8 +241,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                 InvoiceId = invoice.InvoiceId,
                 PaymentType = "Subscription",
                 Amount = paid,
-                PaymentMode = request.PaymentMode,
-                ReferenceNo = request.ReferenceNo,
+                PaymentMode = NormalizePaymentMode(request.PaymentMode),
+                ReferenceNo = TrimOrNull(request.ReferenceNo),
                 ReceivedBy = request.OperatorId,
                 PaymentDate = DateTime.Now,
                 Remarks = "Payment collected while creating company subscription."
@@ -642,7 +642,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (total < 0)
             throw new InvalidOperationException("Invoice total cannot be negative.");
 
-        var paid = Math.Min(Math.Max(paidAmount, 0), total);
+        var paid = ValidateInitialPaidAmount(paidAmount, total);
         var balance = total - paid;
         var invoiceNo = await GenerateNextInvoiceNoAsync(cancellationToken);
 
@@ -1092,6 +1092,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
     public async Task<PaymentResultDto> CollectPaymentAsync(CollectPaymentRequest request, CancellationToken cancellationToken = default)
     {
+        var amount = ValidatePositivePaymentAmount(request.Amount);
+        var paymentMode = NormalizePaymentMode(request.PaymentMode);
         var company = await repository.GetCompanyAsync(request.CompanyId, cancellationToken)
             ?? throw new InvalidOperationException("Company not found.");
 
@@ -1106,6 +1108,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         decimal? invoiceBalanceBeforePayment = null;
         string? invoiceStatusBeforePayment = null;
         string? invoiceStatusAfterPayment = null;
+        var allocations = new List<PaymentAllocation>();
 
         if (request.InvoiceId.HasValue)
         {
@@ -1117,16 +1120,20 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             invoiceBalanceBeforePayment = invoice.BalanceAmount;
             invoiceStatusBeforePayment = invoice.Status;
 
+            if (invoice.Status.Equals("Cancelled", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Cancelled invoice cannot receive payment.");
+
             if (currentPending <= 0)
                 throw new InvalidOperationException("No pending amount found for this invoice.");
 
-            if (request.Amount > currentPending)
+            if (amount > currentPending)
                 throw new InvalidOperationException($"Payment amount cannot be more than current invoice balance AED {currentPending:n2}.");
 
-            ApplyAmountToInvoice(invoice, request.Amount);
+            ApplyAmountToInvoice(invoice, amount);
             paidInvoiceNo = invoice.InvoiceNo;
             invoiceBalanceAfterPayment = invoice.BalanceAmount;
             invoiceStatusAfterPayment = invoice.Status;
+            allocations.Add(new PaymentAllocation(invoice.InvoiceId, invoice.InvoiceNo, amount, invoiceBalanceBeforePayment.Value, invoiceBalanceAfterPayment.Value, invoiceStatusBeforePayment, invoiceStatusAfterPayment));
         }
         else
         {
@@ -1135,37 +1142,50 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             if (currentPending <= 0)
                 throw new InvalidOperationException("No pending amount found for this company.");
 
-            if (request.Amount > currentPending)
+            if (amount > currentPending)
                 throw new InvalidOperationException($"Payment amount cannot be more than current pending amount AED {currentPending:n2}.");
 
-            await ApplyPaymentToOldestInvoicesAsync(company.CompanyId, request.Amount, cancellationToken);
+            allocations.AddRange(await ApplyPaymentToOldestInvoicesAsync(company.CompanyId, amount, cancellationToken));
         }
 
-        var receiptNo = await GenerateNextReceiptNoAsync(cancellationToken);
+        if (allocations.Count == 0)
+            throw new InvalidOperationException("No payable invoice balance was found for this payment.");
 
-        var payment = new ParkingPayment
+        var payments = new List<ParkingPayment>();
+        foreach (var allocation in allocations)
         {
-            ReceiptNo = receiptNo,
-            CompanyId = company.CompanyId,
-            InvoiceId = request.InvoiceId,
-            SessionId = request.SessionId,
-            PaymentType = request.SessionId.HasValue ? "GateCollection" : "Invoice",
-            Amount = request.Amount,
-            PaymentMode = request.PaymentMode,
-            ReferenceNo = request.ReferenceNo,
-            ReceivedBy = request.OperatorId,
-            PaymentDate = DateTime.Now,
-            Remarks = request.Remarks
-        };
+            var receiptNo = await GenerateNextReceiptNoAsync(cancellationToken);
+            var payment = new ParkingPayment
+            {
+                ReceiptNo = receiptNo,
+                CompanyId = company.CompanyId,
+                InvoiceId = allocation.InvoiceId,
+                SessionId = request.SessionId,
+                PaymentType = request.SessionId.HasValue ? "GateCollection" : "Invoice",
+                Amount = allocation.Amount,
+                PaymentMode = paymentMode,
+                ReferenceNo = TrimOrNull(request.ReferenceNo),
+                ReceivedBy = request.OperatorId,
+                PaymentDate = DateTime.Now,
+                Remarks = allocations.Count == 1
+                    ? TrimOrNull(request.Remarks)
+                    : AppendRemarks(request.Remarks, $"Applied AED {allocation.Amount:n2} to invoice {allocation.InvoiceNo}.")
+            };
 
-        await db.ParkingPayments.AddAsync(payment, cancellationToken);
+            payments.Add(payment);
+            await db.ParkingPayments.AddAsync(payment, cancellationToken);
+        }
+
+        var primaryPayment = payments[0];
+        var receiptSummary = string.Join(", ", payments.Select(x => x.ReceiptNo));
         var paymentChanges = new List<SystemActivityChange>
         {
-            new("ReceiptNo", null, receiptNo),
-            new("Amount", null, AuditValue(request.Amount)),
-            new("PaymentMode", null, payment.PaymentMode),
-            new("ReferenceNo", null, payment.ReferenceNo),
-            new("CurrentPendingAmount", AuditValue(currentPending), null)
+            new("ReceiptNo", null, receiptSummary),
+            new("Amount", null, AuditValue(amount)),
+            new("PaymentMode", null, primaryPayment.PaymentMode),
+            new("ReferenceNo", null, primaryPayment.ReferenceNo),
+            new("CurrentPendingAmount", AuditValue(currentPending), null),
+            new("AppliedInvoices", null, BuildPaymentAllocationSummary(allocations))
         };
         if (request.InvoiceId.HasValue)
         {
@@ -1174,7 +1194,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             paymentChanges.Add(new("InvoiceStatus", invoiceStatusBeforePayment, invoiceStatusAfterPayment));
         }
 
-        await AddActivityAsync(ParkingConstants.GateActionType.PaymentCollected, company.CompanyId, request.SessionId, null, null, "Payment Collected", $"Received AED {request.Amount:n2}", request.OperatorId, cancellationToken, paymentChanges, "ParkingPayment", receiptNo);
+        await AddActivityAsync(ParkingConstants.GateActionType.PaymentCollected, company.CompanyId, request.SessionId, null, null, "Payment Collected", $"Received AED {amount:n2}", request.OperatorId, cancellationToken, paymentChanges, "ParkingPayment", receiptSummary);
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
@@ -1252,11 +1272,11 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         }
 
         return new PaymentResultDto(
-            payment.PaymentId,
-            payment.ReceiptNo,
+            primaryPayment.PaymentId,
+            primaryPayment.ReceiptNo,
             company.CompanyId,
-            payment.Amount,
-            payment.PaymentMode,
+            amount,
+            primaryPayment.PaymentMode,
             pending,
             finalMessage);
     }
@@ -1289,7 +1309,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (total < 0)
             throw new InvalidOperationException("Invoice total cannot be negative.");
 
-        var paid = Math.Min(Math.Max(request.PaidAmount, 0), total);
+        var paid = ValidateInitialPaidAmount(request.PaidAmount, total);
         var balance = total - paid;
         var invoiceNo = await GenerateNextInvoiceNoAsync(cancellationToken);
 
@@ -1350,8 +1370,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                 InvoiceId = invoice.InvoiceId,
                 PaymentType = "ExtraSlot",
                 Amount = paid,
-                PaymentMode = request.PaymentMode,
-                ReferenceNo = request.ReferenceNo,
+                PaymentMode = NormalizePaymentMode(request.PaymentMode),
+                ReferenceNo = TrimOrNull(request.ReferenceNo),
                 ReceivedBy = request.OperatorId,
                 PaymentDate = DateTime.Now,
                 Remarks = "Payment collected with extra slot invoice."
@@ -1405,6 +1425,121 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         request.PageSize = 5000;
         var all = await BuildInvoiceListItemsAsync(request, cancellationToken);
         return SortInvoices(all, request.SortBy, request.SortDirection).Take(5000).ToList();
+    }
+
+    public async Task<InvoicePaymentReconciliationResultDto> GetInvoicePaymentReconciliationAsync(InvoicePaymentReconciliationQueryRequest request, CancellationToken cancellationToken = default)
+    {
+        request.Page = Math.Max(request.Page, 1);
+        request.PageSize = Math.Clamp(request.PageSize, 10, 100);
+
+        var query = db.ParkingInvoices
+            .AsNoTracking()
+            .Include(x => x.Company)
+            .AsQueryable();
+
+        var search = (request.SearchText ?? string.Empty).Trim();
+        if (search.Length > 0)
+        {
+            query = query.Where(x => x.InvoiceNo.Contains(search) ||
+                                     x.Company.CompanyName.Contains(search) ||
+                                     x.Company.CompanyCode.Contains(search));
+        }
+
+        if (request.CompanyId.HasValue && request.CompanyId.Value > 0)
+            query = query.Where(x => x.CompanyId == request.CompanyId.Value);
+
+        var invoiceType = NormalizeInvoiceTypeFilter(request.InvoiceType);
+        if (!string.IsNullOrWhiteSpace(invoiceType))
+            query = query.Where(x => x.InvoiceType == invoiceType);
+
+        if (!request.IncludeCancelled)
+            query = query.Where(x => x.Status != "Cancelled");
+
+        if (request.InvoiceFrom.HasValue)
+            query = query.Where(x => x.InvoiceDate.Date >= request.InvoiceFrom.Value.Date);
+        if (request.InvoiceTo.HasValue)
+            query = query.Where(x => x.InvoiceDate.Date <= request.InvoiceTo.Value.Date);
+
+        var invoices = await query
+            .OrderByDescending(x => x.InvoiceDate)
+            .ThenByDescending(x => x.InvoiceId)
+            .Take(5000)
+            .ToListAsync(cancellationToken);
+
+        var invoiceIds = invoices.Select(x => x.InvoiceId).ToList();
+        var paymentSums = invoiceIds.Count == 0
+            ? new Dictionary<int, PaymentSummary>()
+            : await db.ParkingPayments
+                .AsNoTracking()
+                .Where(x => x.InvoiceId.HasValue && invoiceIds.Contains(x.InvoiceId.Value))
+                .GroupBy(x => x.InvoiceId!.Value)
+                .Select(x => new { InvoiceId = x.Key, Amount = x.Sum(y => y.Amount), Count = x.Count() })
+                .ToDictionaryAsync(x => x.InvoiceId, x => new PaymentSummary(x.InvoiceId, x.Amount, x.Count), cancellationToken);
+
+        var all = invoices.Select(invoice =>
+        {
+            paymentSums.TryGetValue(invoice.InvoiceId, out var paymentSummary);
+            var linkedPaymentAmount = paymentSummary?.Amount ?? 0m;
+            var linkedPaymentCount = paymentSummary?.Count ?? 0;
+            var expectedBalance = invoice.TotalAmount - linkedPaymentAmount;
+            var paidDifference = invoice.PaidAmount - linkedPaymentAmount;
+            var balanceDifference = invoice.BalanceAmount - expectedBalance;
+            var storedMathDifference = invoice.TotalAmount - invoice.PaidAmount - invoice.BalanceAmount;
+            var expectedStatus = invoice.Status.Equals("Cancelled", StringComparison.OrdinalIgnoreCase)
+                ? "Cancelled"
+                : GetInvoiceStatus(expectedBalance, linkedPaymentAmount);
+
+            var issues = new List<string>();
+            if (HasMoneyDifference(paidDifference)) issues.Add("Paid amount does not match linked payments");
+            if (HasMoneyDifference(balanceDifference)) issues.Add("Balance amount does not match linked payments");
+            if (HasMoneyDifference(storedMathDifference)) issues.Add("Stored total/paid/balance math is inconsistent");
+            if (invoice.TotalAmount < 0 || invoice.PaidAmount < 0 || invoice.BalanceAmount < 0 || linkedPaymentAmount < 0) issues.Add("Negative amount found");
+            if (!invoice.Status.Equals(expectedStatus, StringComparison.OrdinalIgnoreCase)) issues.Add("Invoice status does not match expected payment status");
+
+            return new InvoicePaymentReconciliationItemDto(
+                invoice.InvoiceId,
+                invoice.InvoiceNo,
+                invoice.CompanyId,
+                invoice.Company.CompanyCode,
+                invoice.Company.CompanyName,
+                invoice.InvoiceType,
+                invoice.InvoiceDate,
+                invoice.TotalAmount,
+                invoice.PaidAmount,
+                invoice.BalanceAmount,
+                linkedPaymentAmount,
+                linkedPaymentCount,
+                expectedBalance,
+                paidDifference,
+                balanceDifference,
+                storedMathDifference,
+                invoice.Status,
+                expectedStatus,
+                issues.Count > 0,
+                issues.Count == 0 ? "OK" : string.Join("; ", issues));
+        }).ToList();
+
+        if (request.MismatchOnly)
+            all = all.Where(x => x.HasMismatch).ToList();
+
+        var total = all.Count;
+        var totalPages = Math.Max((int)Math.Ceiling(total / (double)request.PageSize), 1);
+        var page = Math.Min(request.Page, totalPages);
+        var items = all.Skip((page - 1) * request.PageSize).Take(request.PageSize).ToList();
+
+        return new InvoicePaymentReconciliationResultDto(
+            items,
+            page,
+            request.PageSize,
+            total,
+            totalPages,
+            all.Count(x => x.HasMismatch),
+            all.Sum(x => x.StoredPaidAmount),
+            all.Sum(x => x.LinkedPaymentAmount),
+            all.Sum(x => x.PaidDifference),
+            all.Sum(x => x.StoredBalanceAmount),
+            all.Sum(x => x.ExpectedBalanceAmount),
+            all.Sum(x => x.BalanceDifference));
     }
 
     public async Task<InvoiceListItemDto> GetInvoiceByIdAsync(int invoiceId, CancellationToken cancellationToken = default)
@@ -1461,9 +1596,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (total < 0)
             throw new InvalidOperationException("Invoice total cannot be negative.");
 
-        var paid = Math.Max(request.PaidAmount, 0);
-        if (paid > total)
-            throw new InvalidOperationException("Paid amount cannot be greater than invoice total.");
+        var paid = ValidateInitialPaidAmount(request.PaidAmount, total);
 
         var invoiceNo = TrimOrNull(request.InvoiceNo) ?? await GenerateNextInvoiceNoAsync(cancellationToken);
         var duplicate = await db.ParkingInvoices.AnyAsync(x => x.InvoiceNo == invoiceNo, cancellationToken);
@@ -2664,21 +2797,30 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         }, cancellationToken);
     }
 
-    private async Task<decimal> ApplyPaymentToOldestInvoicesAsync(int companyId, decimal amount, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<PaymentAllocation>> ApplyPaymentToOldestInvoicesAsync(int companyId, decimal amount, CancellationToken cancellationToken)
     {
         var invoices = await db.ParkingInvoices
-            .Where(x => x.CompanyId == companyId && x.BalanceAmount > 0)
+            .Where(x => x.CompanyId == companyId && x.BalanceAmount > 0 && x.Status != "Cancelled")
             .OrderBy(x => x.InvoiceDate)
+            .ThenBy(x => x.InvoiceId)
             .ToListAsync(cancellationToken);
 
+        var allocations = new List<PaymentAllocation>();
         foreach (var invoice in invoices)
         {
             if (amount <= 0) break;
             var apply = Math.Min(amount, invoice.BalanceAmount);
+            var balanceBefore = invoice.BalanceAmount;
+            var statusBefore = invoice.Status;
             ApplyAmountToInvoice(invoice, apply);
+            allocations.Add(new PaymentAllocation(invoice.InvoiceId, invoice.InvoiceNo, apply, balanceBefore, invoice.BalanceAmount, statusBefore, invoice.Status));
             amount -= apply;
         }
-        return amount;
+
+        if (amount > 0)
+            throw new InvalidOperationException($"Payment amount could not be fully allocated. Remaining unapplied amount AED {amount:n2}.");
+
+        return allocations;
     }
 
     private static void ApplyAmountToInvoice(ParkingInvoice invoice, decimal amount)
@@ -2689,6 +2831,10 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         invoice.BalanceAmount -= apply;
         invoice.Status = GetInvoiceStatus(invoice.BalanceAmount, invoice.PaidAmount);
     }
+
+    private sealed record PaymentAllocation(int InvoiceId, string InvoiceNo, decimal Amount, decimal BalanceBefore, decimal BalanceAfter, string StatusBefore, string StatusAfter);
+
+    private sealed record PaymentSummary(int InvoiceId, decimal Amount, int Count);
 
     private async Task EnsureParkingCapacityAvailableAsync(CancellationToken cancellationToken)
     {
@@ -3294,7 +3440,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             .Where(x => x.SubscriptionId.HasValue && subscriptionIds.Contains(x.SubscriptionId.Value) && x.Status != "Cancelled")
             .Select(x => new
             {
-                SubscriptionId = x.SubscriptionId.Value,
+                SubscriptionId = x.SubscriptionId.GetValueOrDefault(),
                 x.InvoiceDate,
                 x.InvoiceId,
                 x.BalanceAmount
@@ -3501,6 +3647,33 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
     private static string GetInvoiceStatus(decimal balance, decimal paid) =>
         balance <= 0 ? ParkingConstants.PaymentStatus.Paid : paid > 0 ? ParkingConstants.PaymentStatus.Partial : ParkingConstants.PaymentStatus.Unpaid;
+
+    private static decimal ValidatePositivePaymentAmount(decimal amount)
+    {
+        if (amount <= 0)
+            throw new InvalidOperationException("Payment amount must be greater than zero.");
+        return amount;
+    }
+
+    private static decimal ValidateInitialPaidAmount(decimal paidAmount, decimal total)
+    {
+        if (paidAmount < 0)
+            throw new InvalidOperationException("Paid amount cannot be negative.");
+        if (paidAmount > total)
+            throw new InvalidOperationException("Paid amount cannot be greater than invoice total.");
+        return paidAmount;
+    }
+
+    private static string NormalizePaymentMode(string? paymentMode)
+    {
+        var cleaned = (paymentMode ?? string.Empty).Trim();
+        return cleaned.Length == 0 ? "Cash" : cleaned;
+    }
+
+    private static bool HasMoneyDifference(decimal value) => Math.Abs(value) >= 0.01m;
+
+    private static string BuildPaymentAllocationSummary(IReadOnlyList<PaymentAllocation> allocations) =>
+        string.Join("; ", allocations.Select(x => $"{x.InvoiceNo}: AED {x.Amount:n2}, balance AED {x.BalanceBefore:n2} -> {x.BalanceAfter:n2}, status {x.StatusBefore} -> {x.StatusAfter}"));
 
 
     private static void ValidateCompanyContact(string? mobile, string? email)

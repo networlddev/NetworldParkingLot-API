@@ -180,6 +180,42 @@ public sealed record PagedInvoiceResultDto(
     int OverdueCount,
     int CancelledCount);
 
+public sealed record InvoicePaymentReconciliationItemDto(
+    int InvoiceId,
+    string InvoiceNo,
+    int CompanyId,
+    string CompanyCode,
+    string CompanyName,
+    string InvoiceType,
+    DateTime InvoiceDate,
+    decimal TotalAmount,
+    decimal StoredPaidAmount,
+    decimal StoredBalanceAmount,
+    decimal LinkedPaymentAmount,
+    int LinkedPaymentCount,
+    decimal ExpectedBalanceAmount,
+    decimal PaidDifference,
+    decimal BalanceDifference,
+    decimal StoredMathDifference,
+    string StoredStatus,
+    string ExpectedStatus,
+    bool HasMismatch,
+    string IssueSummary);
+
+public sealed record InvoicePaymentReconciliationResultDto(
+    IReadOnlyList<InvoicePaymentReconciliationItemDto> Items,
+    int Page,
+    int PageSize,
+    int TotalCount,
+    int TotalPages,
+    int MismatchCount,
+    decimal TotalStoredPaidAmount,
+    decimal TotalLinkedPaymentAmount,
+    decimal TotalPaidDifference,
+    decimal TotalStoredBalanceAmount,
+    decimal TotalExpectedBalanceAmount,
+    decimal TotalBalanceDifference);
+
 public sealed record InvoicePaymentDto(
     int PaymentId,
     string ReceiptNo,

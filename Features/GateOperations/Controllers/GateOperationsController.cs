@@ -505,6 +505,37 @@ public sealed class GateOperationsController(IGateOperationService service, ISys
     }
 
     [RequireParkingPermission("invoices", "view")]
+    [HttpGet("invoices/reconciliation")]
+    public async Task<ActionResult<ApiResponse<InvoicePaymentReconciliationResultDto>>> GetInvoicePaymentReconciliation(
+        [FromQuery] string? searchText,
+        [FromQuery] int? companyId,
+        [FromQuery] string? invoiceType,
+        [FromQuery] bool mismatchOnly = true,
+        [FromQuery] bool includeCancelled = false,
+        [FromQuery] DateTime? invoiceFrom = null,
+        [FromQuery] DateTime? invoiceTo = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 25,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new InvoicePaymentReconciliationQueryRequest
+        {
+            SearchText = searchText,
+            CompanyId = companyId,
+            InvoiceType = invoiceType,
+            MismatchOnly = mismatchOnly,
+            IncludeCancelled = includeCancelled,
+            InvoiceFrom = invoiceFrom,
+            InvoiceTo = invoiceTo,
+            Page = page,
+            PageSize = pageSize
+        };
+
+        var data = await service.GetInvoicePaymentReconciliationAsync(request, cancellationToken);
+        return Ok(ApiResponse<InvoicePaymentReconciliationResultDto>.Ok(data));
+    }
+
+    [RequireParkingPermission("invoices", "view")]
     [HttpGet("invoices/{invoiceId:int}")]
     public async Task<ActionResult<ApiResponse<InvoiceListItemDto>>> GetInvoice(int invoiceId, CancellationToken cancellationToken)
     {

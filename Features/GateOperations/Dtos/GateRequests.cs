@@ -346,6 +346,19 @@ public sealed class PaymentListQueryRequest
     public int PageSize { get; set; } = 25;
 }
 
+public sealed class InvoicePaymentReconciliationQueryRequest
+{
+    public string? SearchText { get; set; }
+    public int? CompanyId { get; set; }
+    public string? InvoiceType { get; set; }
+    public bool MismatchOnly { get; set; } = true;
+    public bool IncludeCancelled { get; set; }
+    public DateTime? InvoiceFrom { get; set; }
+    public DateTime? InvoiceTo { get; set; }
+    public int Page { get; set; } = 1;
+    public int PageSize { get; set; } = 25;
+}
+
 public sealed class VehicleBarcodeListQueryRequest
 {
     public string? SearchText { get; set; }

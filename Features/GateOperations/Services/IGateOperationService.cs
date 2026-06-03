@@ -28,6 +28,7 @@ public interface IGateOperationService
     Task<ExtraSlotInvoiceResultDto> CreateExtraSlotInvoiceAsync(CreateExtraSlotInvoiceRequest request, CancellationToken cancellationToken = default);
     Task<PagedInvoiceResultDto> GetInvoicesAsync(InvoiceListQueryRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<InvoiceListItemDto>> ExportInvoicesAsync(InvoiceListQueryRequest request, CancellationToken cancellationToken = default);
+    Task<InvoicePaymentReconciliationResultDto> GetInvoicePaymentReconciliationAsync(InvoicePaymentReconciliationQueryRequest request, CancellationToken cancellationToken = default);
     Task<InvoiceListItemDto> GetInvoiceByIdAsync(int invoiceId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<InvoicePaymentDto>> GetInvoicePaymentsAsync(int invoiceId, CancellationToken cancellationToken = default);
     Task<InvoiceListItemDto> CreateInvoiceAsync(CreateInvoiceRequest request, CancellationToken cancellationToken = default);
