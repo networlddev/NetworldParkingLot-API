@@ -143,6 +143,31 @@ public sealed class AccessControlController(IUserAccessService userAccessService
         }
     }
 
+    [RequireParkingPermission("access_control", "view")]
+    [HttpGet("users/{userId:int}/permission-overrides")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<UserPermissionOverrideDto>>>> GetUserPermissionOverrides(int userId, CancellationToken cancellationToken)
+    {
+        var data = await userAccessService.GetUserPermissionOverridesAsync(userId, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<UserPermissionOverrideDto>>.Ok(data));
+    }
+
+    [RequireParkingPermission("access_control", "edit")]
+    [HttpPut("users/{userId:int}/permission-overrides")]
+    public async Task<ActionResult<ApiResponse<object>>> SaveUserPermissionOverrides(int userId, [FromBody] SaveUserPermissionOverridesDto request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await userAccessService.SaveUserPermissionOverridesAsync(userId, request, cancellationToken);
+            await RecordAccessActivityAsync("edit", "Success", "AppUserPermission", userId.ToString(), "User permission overrides saved", "Force allow/deny user permission overrides updated.", cancellationToken);
+            return Ok(ApiResponse<object>.Ok(new { success = true }, "User permission overrides saved."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            await RecordAccessActivityAsync("edit", "Failure", "AppUserPermission", userId.ToString(), "User permission overrides save failed", ex.Message, cancellationToken);
+            return BadRequest(ApiResponse<object>.Fail(ex.Message));
+        }
+    }
+
     private Task RecordAccessActivityAsync(string actionKey, string result, string entityType, string? entityId, string title, string? message, CancellationToken cancellationToken)
     {
         return activityService.RecordAsync(this.BuildActivity(

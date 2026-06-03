@@ -26,4 +26,6 @@ public interface IUserAccessService
     Task SaveUserRolesAsync(int userId, SaveUserRolesDto request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<AccessPermissionDto>> GetUserPermissionsAsync(int userId, CancellationToken cancellationToken = default);
     Task SaveUserPermissionsAsync(int userId, SaveUserPermissionsDto request, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<UserPermissionOverrideDto>> GetUserPermissionOverridesAsync(int userId, CancellationToken cancellationToken = default);
+    Task SaveUserPermissionOverridesAsync(int userId, SaveUserPermissionOverridesDto request, CancellationToken cancellationToken = default);
 }

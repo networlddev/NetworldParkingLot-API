@@ -310,15 +310,103 @@ public sealed class UserAccessService(
         await db.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<UserPermissionOverrideDto>> GetUserPermissionOverridesAsync(int userId, CancellationToken cancellationToken = default)
+    {
+        if (!await db.AppUsers.AnyAsync(x => x.UserId == userId, cancellationToken)) throw new InvalidOperationException("User not found.");
+
+        var roleKeys = await GetUserRoleKeysAsync(userId, cancellationToken);
+        var roleAllowed = await GetRoleAllowedActionKeysAsync(roleKeys, cancellationToken);
+        var userOverrides = await db.AppUserPermissions.AsNoTracking()
+            .Where(x => x.UserId == userId && x.Action != null)
+            .Select(x => new { Key = x.ModuleId + "|" + x.ActionId, x.IsAllowed })
+            .ToListAsync(cancellationToken);
+        var overrideMap = userOverrides.ToDictionary(x => x.Key, x => x.IsAllowed);
+
+        var rows = await db.AppModuleActions.AsNoTracking()
+            .Where(x => x.Active && x.Module != null && x.Module.Active)
+            .OrderBy(x => x.Module!.SortOrder).ThenBy(x => x.SortOrder).ThenBy(x => x.ActionName)
+            .Select(x => new UserPermissionOverrideDto
+            {
+                ModuleId = x.ModuleId,
+                ModuleKey = x.Module!.ModuleKey,
+                ModuleName = x.Module.ModuleName,
+                ActionId = x.ActionId,
+                ActionKey = x.ActionKey,
+                ActionName = x.ActionName,
+                RoleAllowed = false,
+                EffectiveAllowed = false,
+                OverrideState = "Default"
+            })
+            .ToListAsync(cancellationToken);
+
+        foreach (var row in rows)
+        {
+            var permissionKey = row.ModuleKey + "." + row.ActionKey;
+            var rowKey = row.ModuleId + "|" + row.ActionId;
+            row.RoleAllowed = roleAllowed.Contains(permissionKey);
+            if (overrideMap.TryGetValue(rowKey, out var overrideAllowed))
+            {
+                row.OverrideState = overrideAllowed ? "Allow" : "Deny";
+                row.EffectiveAllowed = overrideAllowed;
+            }
+            else
+            {
+                row.EffectiveAllowed = row.RoleAllowed;
+            }
+        }
+
+        return rows;
+    }
+
+    public async Task SaveUserPermissionOverridesAsync(int userId, SaveUserPermissionOverridesDto request, CancellationToken cancellationToken = default)
+    {
+        if (!await db.AppUsers.AnyAsync(x => x.UserId == userId, cancellationToken)) throw new InvalidOperationException("User not found.");
+        db.AppUserPermissions.RemoveRange(db.AppUserPermissions.Where(x => x.UserId == userId));
+
+        foreach (var p in request.Permissions)
+        {
+            var state = (p.OverrideState ?? "Default").Trim();
+            if (string.Equals(state, "Default", StringComparison.OrdinalIgnoreCase)) continue;
+
+            var action = await db.AppModuleActions.AsNoTracking().FirstOrDefaultAsync(x => x.ActionId == p.ActionId && x.ModuleId == p.ModuleId && x.Active, cancellationToken)
+                ?? throw new InvalidOperationException("Invalid permission action.");
+            var isAllowed = string.Equals(state, "Allow", StringComparison.OrdinalIgnoreCase);
+            if (!isAllowed && !string.Equals(state, "Deny", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Invalid permission override state.");
+
+            await db.AppUserPermissions.AddAsync(new AppUserPermission { UserId = userId, ModuleId = p.ModuleId, ActionId = action.ActionId, IsAllowed = isAllowed }, cancellationToken);
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
     private async Task<List<string>> GetFinalPermissionKeysAsync(int userId, List<string> roles, CancellationToken cancellationToken)
+    {
+        var final = await GetRoleAllowedActionKeysAsync(roles, cancellationToken);
+
+        var userOverrides = await db.AppUserPermissions.AsNoTracking()
+            .Where(x => x.UserId == userId && x.Module != null && x.Module.Active && x.Action != null && x.Action.Active)
+            .Select(x => new { Key = x.Module!.ModuleKey + "." + x.Action!.ActionKey, x.IsAllowed })
+            .ToListAsync(cancellationToken);
+
+        foreach (var userOverride in userOverrides)
+        {
+            if (userOverride.IsAllowed) final.Add(userOverride.Key);
+            else final.Remove(userOverride.Key);
+        }
+
+        return final.OrderBy(x => x).ToList();
+    }
+
+    private async Task<HashSet<string>> GetRoleAllowedActionKeysAsync(List<string> roles, CancellationToken cancellationToken)
     {
         if (roles.Contains("super_admin", StringComparer.OrdinalIgnoreCase))
         {
-            return await db.AppModuleActions.AsNoTracking()
+            var all = await db.AppModuleActions.AsNoTracking()
                 .Where(x => x.Active && x.Module != null && x.Module.Active)
                 .Select(x => x.Module!.ModuleKey + "." + x.ActionKey)
-                .Distinct()
                 .ToListAsync(cancellationToken);
+            return all.ToHashSet(StringComparer.OrdinalIgnoreCase);
         }
 
         var rolePermissions = await db.AppRolePermissions.AsNoTracking()
@@ -326,12 +414,21 @@ public sealed class UserAccessService(
             .Select(x => x.Module!.ModuleKey + "." + x.ActionKey)
             .ToListAsync(cancellationToken);
 
-        var userOverrides = await db.AppUserPermissions.AsNoTracking()
-            .Where(x => x.UserId == userId && x.IsAllowed && x.Module != null && x.Module.Active && x.Action != null && x.Action.Active)
-            .Select(x => x.Module!.ModuleKey + "." + x.Action!.ActionKey)
-            .ToListAsync(cancellationToken);
+        return rolePermissions.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
 
-        return rolePermissions.Concat(userOverrides).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    private async Task<List<string>> GetUserRoleKeysAsync(int userId, CancellationToken cancellationToken)
+    {
+        var roles = await db.AppUserRoles.AsNoTracking()
+            .Where(x => x.UserId == userId && x.Role != null && x.Role.Active)
+            .Select(x => x.Role!.RoleKey)
+            .ToListAsync(cancellationToken);
+        if (roles.Count == 0)
+        {
+            var legacyRole = await db.AppUsers.AsNoTracking().Where(x => x.UserId == userId).Select(x => x.Role).FirstOrDefaultAsync(cancellationToken);
+            if (!string.IsNullOrWhiteSpace(legacyRole)) roles.Add(ToRoleKey(legacyRole));
+        }
+        return roles.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     private async Task<SystemUserListItemDto> BuildUserDtoAsync(AppUser user, CancellationToken cancellationToken)

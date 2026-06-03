@@ -11,6 +11,8 @@ using NetworldParkingLot.Api.Common.Security;
 using NetworldParkingLot.Api.Features.UserAccess.Services;
 using NetworldParkingLot.Api.Features.Settings.Services;
 using NetworldParkingLot.Api.Features.SystemActivity.Services;
+using NetworldParkingLot.Api.Features.Dashboard.Services;
+using NetworldParkingLot.Api.Features.Reports.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -72,6 +74,8 @@ builder.Services.AddScoped<JwtTokenService>();
 builder.Services.AddScoped<IUserAccessService, UserAccessService>();
 builder.Services.AddScoped<ISettingsService, SettingsService>();
 builder.Services.AddScoped<ISystemActivityService, SystemActivityService>();
+builder.Services.AddScoped<IDashboardService, DashboardService>();
+builder.Services.AddScoped<IReportsService, ReportsService>();
 
 var app = builder.Build();
 

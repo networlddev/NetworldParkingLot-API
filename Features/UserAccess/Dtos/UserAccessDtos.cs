@@ -140,6 +140,31 @@ public sealed class SaveUserPermissionsDto
     public List<SavePermissionDto> Permissions { get; set; } = [];
 }
 
+public sealed class UserPermissionOverrideDto
+{
+    public int ModuleId { get; set; }
+    public string ModuleKey { get; set; } = string.Empty;
+    public string ModuleName { get; set; } = string.Empty;
+    public int ActionId { get; set; }
+    public string ActionKey { get; set; } = string.Empty;
+    public string ActionName { get; set; } = string.Empty;
+    public bool RoleAllowed { get; set; }
+    public bool EffectiveAllowed { get; set; }
+    public string OverrideState { get; set; } = "Default";
+}
+
+public sealed class SaveUserPermissionOverrideDto
+{
+    public int ModuleId { get; set; }
+    public int ActionId { get; set; }
+    public string OverrideState { get; set; } = "Default";
+}
+
+public sealed class SaveUserPermissionOverridesDto
+{
+    public List<SaveUserPermissionOverrideDto> Permissions { get; set; } = [];
+}
+
 public sealed class AccessUserLookupDto
 {
     public int UserId { get; set; }
