@@ -247,6 +247,7 @@ public sealed class GateOperationsController(IGateOperationService service, ISys
         }
         catch (InvalidOperationException ex)
         {
+            await RecordSubscriptionFailureAsync("create", "ParkingSubscription", request.CompanyId > 0 ? request.CompanyId.ToString() : null, "Subscription creation failed", ex.Message, cancellationToken);
             return BadRequest(ApiResponse<SubscriptionListItemDto>.Fail(ex.Message));
         }
     }
@@ -262,6 +263,7 @@ public sealed class GateOperationsController(IGateOperationService service, ISys
         }
         catch (InvalidOperationException ex)
         {
+            await RecordSubscriptionFailureAsync("edit", "ParkingSubscription", subscriptionId.ToString(), "Subscription update failed", ex.Message, cancellationToken);
             return BadRequest(ApiResponse<SubscriptionListItemDto>.Fail(ex.Message));
         }
     }
@@ -277,6 +279,7 @@ public sealed class GateOperationsController(IGateOperationService service, ISys
         }
         catch (InvalidOperationException ex)
         {
+            await RecordSubscriptionFailureAsync("cancel", "ParkingSubscription", subscriptionId.ToString(), "Subscription cancellation failed", ex.Message, cancellationToken);
             return BadRequest(ApiResponse<SubscriptionListItemDto>.Fail(ex.Message));
         }
     }
@@ -292,6 +295,7 @@ public sealed class GateOperationsController(IGateOperationService service, ISys
         }
         catch (InvalidOperationException ex)
         {
+            await RecordSubscriptionFailureAsync("renew", "ParkingSubscription", subscriptionId.ToString(), "Subscription renewal failed", ex.Message, cancellationToken);
             return BadRequest(ApiResponse<SubscriptionListItemDto>.Fail(ex.Message));
         }
     }
@@ -969,6 +973,18 @@ public sealed class GateOperationsController(IGateOperationService service, ISys
     {
         return activityService.RecordAsync(this.BuildActivity(
             "gate_operation",
+            actionKey,
+            "Failure",
+            entityType,
+            entityId,
+            title,
+            message), cancellationToken);
+    }
+
+    private Task RecordSubscriptionFailureAsync(string actionKey, string entityType, string? entityId, string title, string message, CancellationToken cancellationToken)
+    {
+        return activityService.RecordAsync(this.BuildActivity(
+            "subscriptions",
             actionKey,
             "Failure",
             entityType,

@@ -365,6 +365,15 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             ? request.EndDate.Value.Date
             : CalculateExtraSlotEndDate(planType, startDate);
 
+        await EnsureRegularSubscriptionDoesNotOverlapAsync(
+            company.CompanyId,
+            null,
+            request.IsExtraSlot,
+            startDate,
+            endDate,
+            ParkingConstants.SubscriptionStatus.Active,
+            cancellationToken);
+
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         var subscription = await CreateSubscriptionInvoiceInternalAsync(
             company,
@@ -437,6 +446,15 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         var paid = invoice?.PaidAmount ?? subscription.PaidAmount;
         if (paid > total)
             throw new InvalidOperationException($"New total AED {total:n2} cannot be less than already paid AED {paid:n2}.");
+
+        await EnsureRegularSubscriptionDoesNotOverlapAsync(
+            subscription.CompanyId,
+            subscription.SubscriptionId,
+            request.IsExtraSlot,
+            startDate,
+            endDate,
+            normalizedStatus,
+            cancellationToken);
 
         await EnsureSubscriptionEditKeepsInsideVehiclesCoveredAsync(
             subscription,
@@ -568,6 +586,15 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             ? request.EndDate.Value.Date
             : CalculateExtraSlotEndDate(planType, startDate);
         var slots = request.SlotsPurchased.HasValue && request.SlotsPurchased.Value > 0 ? request.SlotsPurchased.Value : existing.SlotsPurchased;
+
+        await EnsureRegularSubscriptionDoesNotOverlapAsync(
+            existing.CompanyId,
+            existing.SubscriptionId,
+            existing.IsExtraSlot,
+            startDate,
+            endDate,
+            ParkingConstants.SubscriptionStatus.Active,
+            cancellationToken);
 
         var create = new CreateSubscriptionRequest
         {
@@ -2209,6 +2236,53 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         DateTime StartDate,
         DateTime EndDate,
         string Status);
+
+    private async Task EnsureRegularSubscriptionDoesNotOverlapAsync(
+        int companyId,
+        int? currentSubscriptionId,
+        bool isExtraSlot,
+        DateTime startDate,
+        DateTime endDate,
+        string proposedStatus,
+        CancellationToken cancellationToken)
+    {
+        if (companyId <= 0 || isExtraSlot)
+            return;
+
+        if (!proposedStatus.Equals(ParkingConstants.SubscriptionStatus.Active, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        if (endDate.Date < DateTime.Today)
+            return;
+
+        var overlap = await db.ParkingSubscriptions
+            .AsNoTracking()
+            .Where(x => x.CompanyId == companyId &&
+                        !x.IsExtraSlot &&
+                        x.Status == ParkingConstants.SubscriptionStatus.Active &&
+                        x.EndDate.Date >= DateTime.Today &&
+                        x.StartDate.Date <= endDate.Date &&
+                        x.EndDate.Date >= startDate.Date)
+            .Where(x => !currentSubscriptionId.HasValue || x.SubscriptionId != currentSubscriptionId.Value)
+            .OrderBy(x => x.StartDate)
+            .ThenBy(x => x.SubscriptionId)
+            .Select(x => new
+            {
+                x.SubscriptionId,
+                x.StartDate,
+                x.EndDate,
+                x.SlotsPurchased
+            })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (overlap == null)
+            return;
+
+        throw new InvalidOperationException(
+            $"Cannot save this regular subscription because it overlaps active regular subscription #{overlap.SubscriptionId} " +
+            $"({overlap.StartDate:yyyy-MM-dd} to {overlap.EndDate:yyyy-MM-dd}, {overlap.SlotsPurchased} slot(s)). " +
+            "Cancel, expire, or edit the existing regular subscription first. Extra-slot subscriptions can still be created for additional capacity.");
+    }
 
     private async Task EnsureSubscriptionEditKeepsInsideVehiclesCoveredAsync(
         ParkingSubscription currentSubscription,
