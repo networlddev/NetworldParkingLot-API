@@ -20,6 +20,7 @@ public sealed class DashboardService(NetworldParkingDbContext db) : IDashboardSe
 
         var capacity = await GetTotalCapacityAsync(cancellationToken);
         var vehiclesInside = await db.ParkingSessions.CountAsync(x => x.Status == ParkingConstants.SessionStatus.Inside, cancellationToken);
+        var overstayVehicles = await CountCurrentOverstayVehiclesAsync(today, cancellationToken);
         var collectedAmount = await db.ParkingPayments.Where(x => x.PaymentDate >= from && x.PaymentDate < toExclusive).SumAsync(x => (decimal?)x.Amount, cancellationToken) ?? 0;
         var newCompanies = await db.ParkingCompanies.CountAsync(x => x.CreatedDate >= from && x.CreatedDate < toExclusive, cancellationToken);
 
@@ -40,7 +41,7 @@ public sealed class DashboardService(NetworldParkingDbContext db) : IDashboardSe
             PendingAmount = await db.ParkingInvoices.Where(x => x.BalanceAmount > 0 && x.Status != "Cancelled").SumAsync(x => (decimal?)x.BalanceAmount, cancellationToken) ?? 0,
             CollectedAmount = collectedAmount,
             NewCompanies = newCompanies,
-            OverstayVehicles = await db.ParkingSessions.CountAsync(x => x.Status == ParkingConstants.SessionStatus.Inside && x.OverstayDays > 0, cancellationToken)
+            OverstayVehicles = overstayVehicles
         };
 
         dto.ComparisonMetrics = await BuildComparisonMetricsAsync(from, toExclusive, previousFrom, previousToExclusive, collectedAmount, newCompanies, cancellationToken);
@@ -54,6 +55,22 @@ public sealed class DashboardService(NetworldParkingDbContext db) : IDashboardSe
         dto.TopPendingCompanies = await BuildTopPendingCompaniesAsync(cancellationToken);
 
         return dto;
+    }
+
+    private async Task<int> CountCurrentOverstayVehiclesAsync(DateTime today, CancellationToken cancellationToken)
+    {
+        return await db.ParkingSessions.AsNoTracking()
+            .CountAsync(x =>
+                x.Status == ParkingConstants.SessionStatus.Inside &&
+                (
+                    x.OverstayDays > 0 ||
+                    x.OverstayAmount > 0 ||
+                    (
+                        x.Subscription != null &&
+                        x.Subscription.EndDate.Date < today.Date
+                    )
+                ),
+                cancellationToken);
     }
 
     private async Task<List<DashboardComparisonMetricDto>> BuildComparisonMetricsAsync(

@@ -162,6 +162,8 @@ public sealed record InvoiceListItemDto(
     int? SessionId,
     DateTime CreatedDate,
     DateTime? ModifiedDate,
+    string CreatedByName,
+    string ModifiedByName,
     string? Remarks,
     string? CancellationReason);
 
@@ -227,7 +229,8 @@ public sealed record InvoicePaymentDto(
     string? ReferenceNo,
     DateTime PaymentDate,
     string? Remarks,
-    int ReceivedBy);
+    int ReceivedBy,
+    string ReceivedByName);
 
 public sealed record RecentActivityDto(
     DateTime Time,
@@ -300,7 +303,8 @@ public sealed record PaymentListItemDto(
     string? ReferenceNo,
     DateTime PaymentDate,
     string? Remarks,
-    int ReceivedBy);
+    int ReceivedBy,
+    string ReceivedByName);
 
 public sealed record PagedPaymentResultDto(
     IReadOnlyList<PaymentListItemDto> Items,
@@ -422,7 +426,10 @@ public sealed record CompanyListItemDto(
     DateTime? SubscriptionStartDate,
     DateTime? SubscriptionEndDate,
     DateTime? LastInvoiceDate,
-    DateTime CreatedDate);
+    DateTime CreatedDate,
+    DateTime? ModifiedDate,
+    string CreatedByName,
+    string ModifiedByName);
 
 
 public sealed record SubscriptionListItemDto(
@@ -449,6 +456,9 @@ public sealed record SubscriptionListItemDto(
     string? InvoiceStatus,
     int VehiclesInside,
     DateTime CreatedDate,
+    DateTime? ModifiedDate,
+    string CreatedByName,
+    string ModifiedByName,
     string? Remarks,
     string? CancellationReason);
 

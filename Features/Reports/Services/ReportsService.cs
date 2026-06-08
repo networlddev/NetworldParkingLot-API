@@ -23,7 +23,7 @@ public sealed class ReportsService(NetworldParkingDbContext db) : IReportsServic
         new() { ReportKey = "invoice-payment-reconciliation", ReportName = "Invoice Payment Reconciliation", Category = "Finance", Description = "Invoices whose stored paid/pending values differ from linked payments.", SupportsStatus = false, SupportsCompany = true },
         new() { ReportKey = "user-list", ReportName = "User List", Category = "Access", Description = "System users and role assignments.", SupportsDateRange = false, SupportsStatus = true, SupportsCompany = false },
         new() { ReportKey = "user-permissions", ReportName = "User Permission Overrides", Category = "Access", Description = "Explicit user allow/deny permission overrides.", SupportsDateRange = false, SupportsStatus = false, SupportsCompany = false },
-        new() { ReportKey = "settings-change", ReportName = "Settings Change History", Category = "History", Description = "Settings updates recorded in system activity history.", SupportsDateRange = true, SupportsStatus = false, SupportsCompany = false }
+        new() { ReportKey = "settings-change", ReportName = "System Activity History", Category = "History", Description = "Full audited system activity history across modules.", SupportsDateRange = true, SupportsStatus = true, SupportsCompany = false }
     ];
 
     public IReadOnlyList<ReportCatalogItemDto> GetCatalog() => Catalog;
@@ -61,12 +61,25 @@ public sealed class ReportsService(NetworldParkingDbContext db) : IReportsServic
             q = q.Where(x => x.CompanyCode.Contains(s) || x.CompanyName.Contains(s) || (x.Mobile != null && x.Mobile.Contains(s)) || (x.Trn != null && x.Trn.Contains(s)));
         }
 
-        var result = NewResult(key, request, Col("companyCode", "Code"), Col("companyName", "Company"), Col("mobile", "Mobile"), Col("trn", "TRN"), Col("status", "Status"), Col("openingBalance", "Opening Balance", "money"), Col("creditLimit", "Credit Limit", "money"));
+        var result = NewResult(key, request, Col("companyCode", "Code"), Col("companyName", "Company"), Col("mobile", "Mobile"), Col("trn", "TRN"), Col("status", "Status"), Col("activeSlots", "Active Slots", "number"), Col("vehiclesInside", "Vehicles Inside", "number"), Col("pendingAmount", "Pending Amount", "money"), Col("createdBy", "Created By"), Col("modifiedBy", "Modified By"));
         result.TotalRecords = await q.CountAsync(cancellationToken);
         var companies = await q.OrderBy(x => x.CompanyName).Skip(Skip(request)).Take(Size(request))
-            .Select(x => new { x.CompanyCode, x.CompanyName, x.Mobile, x.Trn, x.Status, x.OpeningBalance, x.CreditLimit })
+            .Select(x => new
+            {
+                x.CompanyCode,
+                x.CompanyName,
+                x.Mobile,
+                x.Trn,
+                x.Status,
+                ActiveSlots = db.ParkingSubscriptions.Where(s => s.CompanyId == x.CompanyId && s.Status == ParkingConstants.SubscriptionStatus.Active && s.EndDate.Date >= DateTime.Today).Sum(s => (int?)s.SlotsPurchased) ?? 0,
+                VehiclesInside = db.ParkingSessions.Count(s => s.CompanyId == x.CompanyId && s.Status == ParkingConstants.SessionStatus.Inside),
+                PendingAmount = db.ParkingInvoices.Where(i => i.CompanyId == x.CompanyId && i.Status != "Cancelled").Sum(i => (decimal?)i.BalanceAmount) ?? 0,
+                x.CreatedBy,
+                x.ModifiedBy
+            })
             .ToListAsync(cancellationToken);
-        result.Rows = companies.Select(x => Row(("companyCode", x.CompanyCode), ("companyName", x.CompanyName), ("mobile", x.Mobile), ("trn", x.Trn), ("status", x.Status), ("openingBalance", Money(x.OpeningBalance)), ("creditLimit", Money(x.CreditLimit)))).ToList();
+        var users = await UserLookupAsync(companies.SelectMany(x => new[] { x.CreatedBy, x.ModifiedBy }), cancellationToken);
+        result.Rows = companies.Select(x => Row(("companyCode", x.CompanyCode), ("companyName", x.CompanyName), ("mobile", x.Mobile), ("trn", x.Trn), ("status", x.Status), ("activeSlots", x.ActiveSlots.ToString(CultureInfo.InvariantCulture)), ("vehiclesInside", x.VehiclesInside.ToString(CultureInfo.InvariantCulture)), ("pendingAmount", Money(x.PendingAmount)), ("createdBy", UserName(users, x.CreatedBy)), ("modifiedBy", UserName(users, x.ModifiedBy)))).ToList();
         return result;
     }
 
@@ -76,13 +89,23 @@ public sealed class ReportsService(NetworldParkingDbContext db) : IReportsServic
         if (request.CompanyId.HasValue) q = q.Where(x => x.CompanyId == request.CompanyId.Value);
 
         var rows = await q.GroupBy(x => new { x.CompanyId, x.Company.CompanyCode, x.Company.CompanyName })
-            .Select(x => new { x.Key.CompanyCode, x.Key.CompanyName, Invoices = x.Count(), Pending = x.Sum(i => i.BalanceAmount), Total = x.Sum(i => i.TotalAmount) })
+            .Select(x => new
+            {
+                x.Key.CompanyCode,
+                x.Key.CompanyName,
+                Invoices = x.Count(),
+                Pending = x.Sum(i => i.BalanceAmount),
+                Total = x.Sum(i => i.TotalAmount),
+                LastCreatedBy = x.OrderByDescending(i => i.InvoiceDate).Select(i => i.CreatedBy).FirstOrDefault(),
+                LastModifiedBy = x.OrderByDescending(i => i.ModifiedDate ?? i.CreatedDate).Select(i => i.ModifiedBy).FirstOrDefault()
+            })
             .OrderByDescending(x => x.Pending)
             .Skip(Skip(request)).Take(Size(request))
             .ToListAsync(cancellationToken);
-        var result = NewResult(key, request, Col("companyCode", "Code"), Col("companyName", "Company"), Col("invoices", "Invoices", "number"), Col("total", "Total", "money"), Col("pending", "Pending", "money"));
+        var result = NewResult(key, request, Col("companyCode", "Code"), Col("companyName", "Company"), Col("invoices", "Invoices", "number"), Col("total", "Total", "money"), Col("pending", "Pending", "money"), Col("createdBy", "Created By"), Col("modifiedBy", "Modified By"));
         result.TotalRecords = await q.Select(x => x.CompanyId).Distinct().CountAsync(cancellationToken);
-        result.Rows = rows.Select(x => Row(("companyCode", x.CompanyCode), ("companyName", x.CompanyName), ("invoices", x.Invoices.ToString(CultureInfo.InvariantCulture)), ("total", Money(x.Total)), ("pending", Money(x.Pending)))).ToList();
+        var users = await UserLookupAsync(rows.SelectMany(x => new[] { x.LastCreatedBy, x.LastModifiedBy }), cancellationToken);
+        result.Rows = rows.Select(x => Row(("companyCode", x.CompanyCode), ("companyName", x.CompanyName), ("invoices", x.Invoices.ToString(CultureInfo.InvariantCulture)), ("total", Money(x.Total)), ("pending", Money(x.Pending)), ("createdBy", UserName(users, x.LastCreatedBy)), ("modifiedBy", UserName(users, x.LastModifiedBy)))).ToList();
         return result;
     }
 
@@ -95,12 +118,27 @@ public sealed class ReportsService(NetworldParkingDbContext db) : IReportsServic
         ApplyStatus(ref q, request.Status);
         if (TryDateRange(request, out var from, out var toExclusive)) q = q.Where(x => x.StartDate < toExclusive && x.EndDate >= from);
 
-        var result = NewResult(key, request, Col("company", "Company"), Col("planType", "Plan"), Col("slots", "Slots", "number"), Col("startDate", "Start"), Col("endDate", "End"), Col("status", "Status"), Col("total", "Total", "money"), Col("balance", "Balance", "money"));
+        var result = NewResult(key, request, Col("company", "Company"), Col("planType", "Plan"), Col("slots", "Slots", "number"), Col("startDate", "Start"), Col("endDate", "End"), Col("status", "Status"), Col("total", "Total", "money"), Col("balance", "Pending Payment", "money"), Col("createdBy", "Created By"), Col("modifiedBy", "Modified By"));
         result.TotalRecords = await q.CountAsync(cancellationToken);
         var subscriptions = await q.OrderByDescending(x => x.EndDate).Skip(Skip(request)).Take(Size(request))
-            .Select(x => new { x.Company.CompanyName, x.PlanType, x.SlotsPurchased, x.StartDate, x.EndDate, x.Status, x.TotalAmount, x.BalanceAmount })
+            .Select(x => new
+            {
+                x.Company.CompanyName,
+                x.PlanType,
+                x.SlotsPurchased,
+                x.StartDate,
+                x.EndDate,
+                x.Status,
+                x.TotalAmount,
+                PendingPayment = x.SourceInvoiceId == null
+                    ? x.BalanceAmount
+                    : db.ParkingInvoices.Where(i => i.InvoiceId == x.SourceInvoiceId.Value && i.Status != "Cancelled").Select(i => (decimal?)i.BalanceAmount).FirstOrDefault() ?? x.BalanceAmount,
+                x.CreatedBy,
+                x.ModifiedBy
+            })
             .ToListAsync(cancellationToken);
-        result.Rows = subscriptions.Select(x => Row(("company", x.CompanyName), ("planType", x.PlanType), ("slots", x.SlotsPurchased.ToString()), ("startDate", Date(x.StartDate)), ("endDate", Date(x.EndDate)), ("status", x.Status), ("total", Money(x.TotalAmount)), ("balance", Money(x.BalanceAmount)))).ToList();
+        var users = await UserLookupAsync(subscriptions.SelectMany(x => new[] { x.CreatedBy, x.ModifiedBy }), cancellationToken);
+        result.Rows = subscriptions.Select(x => Row(("company", x.CompanyName), ("planType", x.PlanType), ("slots", x.SlotsPurchased.ToString(CultureInfo.InvariantCulture)), ("startDate", Date(x.StartDate)), ("endDate", Date(x.EndDate)), ("status", x.Status), ("total", Money(x.TotalAmount)), ("balance", Money(x.PendingPayment)), ("createdBy", UserName(users, x.CreatedBy)), ("modifiedBy", UserName(users, x.ModifiedBy)))).ToList();
         return result;
     }
 
@@ -118,12 +156,19 @@ public sealed class ReportsService(NetworldParkingDbContext db) : IReportsServic
             q = q.Where(x => x.BarcodeNo.Contains(s) || (x.PlateNo != null && x.PlateNo.Contains(s)) || x.Company.CompanyName.Contains(s));
         }
 
-        var result = NewResult(key, request, Col("barcode", "Barcode"), Col("plateNo", "Plate"), Col("company", "Company"), Col("entryTime", "Entry"), Col("exitTime", "Exit"), Col("status", "Status"), Col("overstayDays", "Overstay Days", "number"), Col("amount", "Amount", "money"));
+        var columns = overstayOnly
+            ? new[] { Col("barcode", "Barcode"), Col("plateNo", "Plate"), Col("company", "Company"), Col("entryTime", "Entry"), Col("exitTime", "Exit"), Col("status", "Status"), Col("overstayDays", "Overstay Days", "number"), Col("overstayAmount", "Overstay Amount", "money"), Col("createdBy", "Created By"), Col("modifiedBy", "Modified By") }
+            : new[] { Col("barcode", "Barcode"), Col("plateNo", "Plate"), Col("company", "Company"), Col("entryTime", "Entry"), Col("exitTime", "Exit"), Col("validUntil", "Valid Until"), Col("duration", "Duration"), Col("status", "Status"), Col("createdBy", "Created By"), Col("modifiedBy", "Modified By") };
+        var result = NewResult(key, request, columns);
         result.TotalRecords = await q.CountAsync(cancellationToken);
         var sessions = await q.OrderByDescending(x => x.CreatedDate).Skip(Skip(request)).Take(Size(request))
-            .Select(x => new { x.BarcodeNo, x.PlateNo, x.Company.CompanyName, x.EntryTime, x.ExitTime, x.Status, x.OverstayDays, x.OverstayAmount })
+            .Select(x => new { x.BarcodeNo, x.PlateNo, x.Company.CompanyName, x.EntryTime, x.ExitTime, ValidUntil = x.Subscription == null ? (DateTime?)null : x.Subscription.EndDate, x.Status, x.OverstayDays, x.OverstayAmount, CreatedBy = (int?)x.CreatedBy, ModifiedBy = x.ExitOperatorId ?? x.EntryOperatorId })
             .ToListAsync(cancellationToken);
-        result.Rows = sessions.Select(x => Row(("barcode", x.BarcodeNo), ("plateNo", x.PlateNo), ("company", x.CompanyName), ("entryTime", DateTimeText(x.EntryTime)), ("exitTime", DateTimeText(x.ExitTime)), ("status", x.Status), ("overstayDays", x.OverstayDays.ToString()), ("amount", Money(x.OverstayAmount)))).ToList();
+        var users = await UserLookupAsync(sessions.SelectMany(x => new[] { x.CreatedBy, x.ModifiedBy }), cancellationToken);
+        result.Rows = sessions.Select(x => overstayOnly
+            ? Row(("barcode", x.BarcodeNo), ("plateNo", x.PlateNo), ("company", x.CompanyName), ("entryTime", DateTimeText(x.EntryTime)), ("exitTime", DateTimeText(x.ExitTime)), ("status", x.Status), ("overstayDays", x.OverstayDays.ToString(CultureInfo.InvariantCulture)), ("overstayAmount", Money(x.OverstayAmount)), ("createdBy", UserName(users, x.CreatedBy)), ("modifiedBy", UserName(users, x.ModifiedBy)))
+            : Row(("barcode", x.BarcodeNo), ("plateNo", x.PlateNo), ("company", x.CompanyName), ("entryTime", DateTimeText(x.EntryTime)), ("exitTime", DateTimeText(x.ExitTime)), ("validUntil", DateTimeText(x.ValidUntil)), ("duration", DurationText(x.EntryTime, x.ExitTime)), ("status", x.Status), ("createdBy", UserName(users, x.CreatedBy)), ("modifiedBy", UserName(users, x.ModifiedBy)))
+        ).ToList();
         return result;
     }
 
@@ -134,12 +179,13 @@ public sealed class ReportsService(NetworldParkingDbContext db) : IReportsServic
         ApplyStatus(ref q, request.Status);
         if (TryDateRange(request, out var from, out var toExclusive)) q = q.Where(x => x.InvoiceDate >= from && x.InvoiceDate < toExclusive);
 
-        var result = NewResult(key, request, Col("invoiceNo", "Invoice"), Col("company", "Company"), Col("date", "Date"), Col("type", "Type"), Col("status", "Status"), Col("total", "Total", "money"), Col("paid", "Paid", "money"), Col("balance", "Balance", "money"));
+        var result = NewResult(key, request, Col("invoiceNo", "Invoice"), Col("company", "Company"), Col("date", "Date"), Col("type", "Type"), Col("status", "Status"), Col("total", "Total", "money"), Col("paid", "Paid", "money"), Col("balance", "Balance", "money"), Col("createdBy", "Created By"), Col("modifiedBy", "Modified By"));
         result.TotalRecords = await q.CountAsync(cancellationToken);
         var invoices = await q.OrderByDescending(x => x.InvoiceDate).Skip(Skip(request)).Take(Size(request))
-            .Select(x => new { x.InvoiceNo, x.Company.CompanyName, x.InvoiceDate, x.InvoiceType, x.Status, x.TotalAmount, x.PaidAmount, x.BalanceAmount })
+            .Select(x => new { x.InvoiceNo, x.Company.CompanyName, x.InvoiceDate, x.InvoiceType, x.Status, x.TotalAmount, x.PaidAmount, x.BalanceAmount, x.CreatedBy, x.ModifiedBy })
             .ToListAsync(cancellationToken);
-        result.Rows = invoices.Select(x => Row(("invoiceNo", x.InvoiceNo), ("company", x.CompanyName), ("date", Date(x.InvoiceDate)), ("type", x.InvoiceType), ("status", x.Status), ("total", Money(x.TotalAmount)), ("paid", Money(x.PaidAmount)), ("balance", Money(x.BalanceAmount)))).ToList();
+        var users = await UserLookupAsync(invoices.SelectMany(x => new[] { x.CreatedBy, x.ModifiedBy }), cancellationToken);
+        result.Rows = invoices.Select(x => Row(("invoiceNo", x.InvoiceNo), ("company", x.CompanyName), ("date", Date(x.InvoiceDate)), ("type", x.InvoiceType), ("status", x.Status), ("total", Money(x.TotalAmount)), ("paid", Money(x.PaidAmount)), ("balance", Money(x.BalanceAmount)), ("createdBy", UserName(users, x.CreatedBy)), ("modifiedBy", UserName(users, x.ModifiedBy)))).ToList();
         return result;
     }
 
@@ -152,22 +198,24 @@ public sealed class ReportsService(NetworldParkingDbContext db) : IReportsServic
         if (grouped)
         {
             var rows = await q.GroupBy(x => new { Date = x.PaymentDate.Date, x.PaymentMode })
-                .Select(x => new { x.Key.Date, Mode = x.Key.PaymentMode, Count = x.Count(), Amount = x.Sum(p => p.Amount) })
+                .Select(x => new { x.Key.Date, Mode = x.Key.PaymentMode, Count = x.Count(), Amount = x.Sum(p => p.Amount), ReceivedBy = (int?)x.OrderByDescending(p => p.PaymentDate).Select(p => p.ReceivedBy).FirstOrDefault() })
                 .OrderByDescending(x => x.Date)
                 .Skip(Skip(request)).Take(Size(request))
                 .ToListAsync(cancellationToken);
-            var result = NewResult(key, request, Col("date", "Date"), Col("mode", "Mode"), Col("receipts", "Receipts", "number"), Col("amount", "Amount", "money"));
+            var result = NewResult(key, request, Col("date", "Date"), Col("mode", "Mode"), Col("receipts", "Receipts", "number"), Col("amount", "Amount", "money"), Col("createdBy", "Created By"), Col("modifiedBy", "Modified By"));
             result.TotalRecords = await q.Select(x => new { Date = x.PaymentDate.Date, x.PaymentMode }).Distinct().CountAsync(cancellationToken);
-            result.Rows = rows.Select(x => Row(("date", Date(x.Date)), ("mode", x.Mode), ("receipts", x.Count.ToString()), ("amount", Money(x.Amount)))).ToList();
+            var users = await UserLookupAsync(rows.Select(x => x.ReceivedBy), cancellationToken);
+            result.Rows = rows.Select(x => Row(("date", Date(x.Date)), ("mode", x.Mode), ("receipts", x.Count.ToString(CultureInfo.InvariantCulture)), ("amount", Money(x.Amount)), ("createdBy", UserName(users, x.ReceivedBy)), ("modifiedBy", string.Empty))).ToList();
             return result;
         }
 
-        var detail = NewResult(key, request, Col("receiptNo", "Receipt"), Col("company", "Company"), Col("date", "Date"), Col("type", "Type"), Col("mode", "Mode"), Col("amount", "Amount", "money"), Col("reference", "Reference"));
+        var detail = NewResult(key, request, Col("receiptNo", "Receipt"), Col("company", "Company"), Col("date", "Date"), Col("type", "Type"), Col("mode", "Mode"), Col("amount", "Amount", "money"), Col("reference", "Reference"), Col("createdBy", "Created By"), Col("modifiedBy", "Modified By"));
         detail.TotalRecords = await q.CountAsync(cancellationToken);
         var payments = await q.OrderByDescending(x => x.PaymentDate).Skip(Skip(request)).Take(Size(request))
-            .Select(x => new { x.ReceiptNo, x.Company.CompanyName, x.PaymentDate, x.PaymentType, x.PaymentMode, x.Amount, x.ReferenceNo })
+            .Select(x => new { x.ReceiptNo, x.Company.CompanyName, x.PaymentDate, x.PaymentType, x.PaymentMode, x.Amount, x.ReferenceNo, ReceivedBy = (int?)x.ReceivedBy })
             .ToListAsync(cancellationToken);
-        detail.Rows = payments.Select(x => Row(("receiptNo", x.ReceiptNo), ("company", x.CompanyName), ("date", DateTimeText(x.PaymentDate)), ("type", x.PaymentType), ("mode", x.PaymentMode), ("amount", Money(x.Amount)), ("reference", x.ReferenceNo))).ToList();
+        var detailUsers = await UserLookupAsync(payments.Select(x => x.ReceivedBy), cancellationToken);
+        detail.Rows = payments.Select(x => Row(("receiptNo", x.ReceiptNo), ("company", x.CompanyName), ("date", DateTimeText(x.PaymentDate)), ("type", x.PaymentType), ("mode", x.PaymentMode), ("amount", Money(x.Amount)), ("reference", x.ReferenceNo), ("createdBy", UserName(detailUsers, x.ReceivedBy)), ("modifiedBy", string.Empty))).ToList();
         return detail;
     }
 
@@ -183,12 +231,13 @@ public sealed class ReportsService(NetworldParkingDbContext db) : IReportsServic
 
         if (request.CompanyId.HasValue) q = q.Where(x => x.Invoice.CompanyId == request.CompanyId.Value);
 
-        var result = NewResult(key, request, Col("invoiceNo", "Invoice"), Col("company", "Company"), Col("storedPaid", "Stored Paid", "money"), Col("linkedPaid", "Linked Paid", "money"), Col("storedBalance", "Stored Balance", "money"), Col("expectedBalance", "Expected Balance", "money"), Col("rows", "Payment Rows", "number"));
+        var result = NewResult(key, request, Col("invoiceNo", "Invoice"), Col("company", "Company"), Col("storedPaid", "Stored Paid", "money"), Col("linkedPaid", "Linked Paid", "money"), Col("storedBalance", "Stored Balance", "money"), Col("expectedBalance", "Expected Balance", "money"), Col("rows", "Payment Rows", "number"), Col("createdBy", "Created By"), Col("modifiedBy", "Modified By"));
         result.TotalRecords = await q.CountAsync(cancellationToken);
         var mismatches = await q.OrderByDescending(x => x.Invoice.InvoiceDate).Skip(Skip(request)).Take(Size(request))
-            .Select(x => new { x.Invoice.InvoiceNo, x.Invoice.Company.CompanyName, x.Invoice.PaidAmount, LinkedPaid = x.Payment == null ? 0 : x.Payment.LinkedPaid, x.Invoice.BalanceAmount, x.Invoice.TotalAmount, PaymentRows = x.Payment == null ? 0 : x.Payment.PaymentRows })
+            .Select(x => new { x.Invoice.InvoiceNo, x.Invoice.Company.CompanyName, x.Invoice.PaidAmount, LinkedPaid = x.Payment == null ? 0 : x.Payment.LinkedPaid, x.Invoice.BalanceAmount, x.Invoice.TotalAmount, PaymentRows = x.Payment == null ? 0 : x.Payment.PaymentRows, x.Invoice.CreatedBy, x.Invoice.ModifiedBy })
             .ToListAsync(cancellationToken);
-        result.Rows = mismatches.Select(x => Row(("invoiceNo", x.InvoiceNo), ("company", x.CompanyName), ("storedPaid", Money(x.PaidAmount)), ("linkedPaid", Money(x.LinkedPaid)), ("storedBalance", Money(x.BalanceAmount)), ("expectedBalance", Money(x.TotalAmount - x.LinkedPaid)), ("rows", x.PaymentRows.ToString()))).ToList();
+        var users = await UserLookupAsync(mismatches.SelectMany(x => new[] { x.CreatedBy, x.ModifiedBy }), cancellationToken);
+        result.Rows = mismatches.Select(x => Row(("invoiceNo", x.InvoiceNo), ("company", x.CompanyName), ("storedPaid", Money(x.PaidAmount)), ("linkedPaid", Money(x.LinkedPaid)), ("storedBalance", Money(x.BalanceAmount)), ("expectedBalance", Money(x.TotalAmount - x.LinkedPaid)), ("rows", x.PaymentRows.ToString(CultureInfo.InvariantCulture)), ("createdBy", UserName(users, x.CreatedBy)), ("modifiedBy", UserName(users, x.ModifiedBy)))).ToList();
         return result;
     }
 
@@ -203,11 +252,12 @@ public sealed class ReportsService(NetworldParkingDbContext db) : IReportsServic
         }
 
         var roleRows = await db.AppUserRoles.AsNoTracking().Where(x => x.Role != null).Select(x => new { x.UserId, x.Role!.RoleName }).ToListAsync(cancellationToken);
-        var result = NewResult(key, request, Col("username", "Username"), Col("fullName", "Full Name"), Col("email", "Email"), Col("status", "Status"), Col("roles", "Roles"));
+        var result = NewResult(key, request, Col("username", "Username"), Col("fullName", "Full Name"), Col("email", "Email"), Col("status", "Status"), Col("roles", "Roles"), Col("createdBy", "Created By"), Col("modifiedBy", "Modified By"));
         result.TotalRecords = await q.CountAsync(cancellationToken);
         var users = await q.OrderBy(x => x.Username).Skip(Skip(request)).Take(Size(request)).ToListAsync(cancellationToken);
+        var userLookup = await UserLookupAsync(users.Select(x => x.ModifiedBy), cancellationToken);
         result.Rows = users.Select(x => Row(
-            ("username", x.Username), ("fullName", x.FullName), ("email", x.Email), ("status", x.Status), ("roles", string.Join(", ", roleRows.Where(r => r.UserId == x.UserId).Select(r => r.RoleName).Distinct()))
+            ("username", x.Username), ("fullName", x.FullName), ("email", x.Email), ("status", x.Status), ("roles", string.Join(", ", roleRows.Where(r => r.UserId == x.UserId).Select(r => r.RoleName).Distinct())), ("createdBy", string.Empty), ("modifiedBy", UserName(userLookup, x.ModifiedBy))
         )).ToList();
         return result;
     }
@@ -215,25 +265,32 @@ public sealed class ReportsService(NetworldParkingDbContext db) : IReportsServic
     private async Task<ReportResultDto> UserPermissionsAsync(string key, ReportQueryDto request, CancellationToken cancellationToken)
     {
         var q = db.AppUserPermissions.AsNoTracking().Where(x => x.User != null && x.Module != null && x.Action != null);
-        var result = NewResult(key, request, Col("user", "User"), Col("module", "Module"), Col("action", "Action"), Col("override", "Override"));
+        var result = NewResult(key, request, Col("user", "User"), Col("module", "Module"), Col("action", "Action"), Col("override", "Override"), Col("createdBy", "Created By"), Col("modifiedBy", "Modified By"));
         result.TotalRecords = await q.CountAsync(cancellationToken);
         var overrides = await q.OrderBy(x => x.User!.Username).ThenBy(x => x.Module!.SortOrder).Skip(Skip(request)).Take(Size(request))
             .Select(x => new { x.User!.Username, x.User.FullName, x.Module!.ModuleName, x.Action!.ActionName, x.IsAllowed })
             .ToListAsync(cancellationToken);
-        result.Rows = overrides.Select(x => Row(("user", string.IsNullOrWhiteSpace(x.FullName) ? x.Username : x.FullName), ("module", x.ModuleName), ("action", x.ActionName), ("override", x.IsAllowed ? "Allow" : "Deny"))).ToList();
+        result.Rows = overrides.Select(x => Row(("user", string.IsNullOrWhiteSpace(x.FullName) ? x.Username : x.FullName), ("module", x.ModuleName), ("action", x.ActionName), ("override", x.IsAllowed ? "Allow" : "Deny"), ("createdBy", string.Empty), ("modifiedBy", string.Empty))).ToList();
         return result;
     }
 
     private async Task<ReportResultDto> SettingsChangeAsync(string key, ReportQueryDto request, CancellationToken cancellationToken)
     {
-        var q = db.SystemActivityLogs.AsNoTracking().Where(x => x.ModuleKey == "settings");
+        var q = db.SystemActivityLogs.AsNoTracking().AsQueryable();
+        if (!string.IsNullOrWhiteSpace(request.Status)) q = q.Where(x => x.Result == request.Status);
         if (TryDateRange(request, out var from, out var toExclusive)) q = q.Where(x => x.ActivityDate >= from && x.ActivityDate < toExclusive);
-        var result = NewResult(key, request, Col("date", "Date"), Col("user", "User"), Col("action", "Action"), Col("title", "Title"), Col("message", "Message"));
+        if (!string.IsNullOrWhiteSpace(request.Search))
+        {
+            var s = request.Search.Trim();
+            q = q.Where(x => x.Username.Contains(s) || x.ModuleKey.Contains(s) || x.ActionKey.Contains(s) || x.Title.Contains(s) || (x.Message != null && x.Message.Contains(s)) || x.EntityType.Contains(s) || (x.EntityId != null && x.EntityId.Contains(s)));
+        }
+
+        var result = NewResult(key, request, Col("date", "Date"), Col("user", "User"), Col("module", "Module"), Col("action", "Action"), Col("entity", "Entity"), Col("result", "Result"), Col("title", "Title"), Col("message", "Message"), Col("createdBy", "Created By"), Col("modifiedBy", "Modified By"));
         result.TotalRecords = await q.CountAsync(cancellationToken);
         var activity = await q.OrderByDescending(x => x.ActivityDate).Skip(Skip(request)).Take(Size(request))
-            .Select(x => new { x.ActivityDate, x.Username, x.ActionKey, x.Title, x.Message })
+            .Select(x => new { x.ActivityDate, x.Username, x.ModuleKey, x.ActionKey, Entity = string.IsNullOrWhiteSpace(x.EntityId) ? x.EntityType : x.EntityType + " #" + x.EntityId, x.Result, x.Title, x.Message })
             .ToListAsync(cancellationToken);
-        result.Rows = activity.Select(x => Row(("date", DateTimeText(x.ActivityDate)), ("user", x.Username), ("action", x.ActionKey), ("title", x.Title), ("message", x.Message))).ToList();
+        result.Rows = activity.Select(x => Row(("date", DateTimeText(x.ActivityDate)), ("user", x.Username), ("module", x.ModuleKey), ("action", x.ActionKey), ("entity", x.Entity), ("result", x.Result), ("title", x.Title), ("message", x.Message), ("createdBy", x.Username), ("modifiedBy", string.Empty))).ToList();
         return result;
     }
 
@@ -248,6 +305,33 @@ public sealed class ReportsService(NetworldParkingDbContext db) : IReportsServic
     private static string Money(decimal value) => value.ToString("0.00", CultureInfo.InvariantCulture);
     private static string Date(DateTime value) => value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     private static string DateTimeText(DateTime? value) => value?.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) ?? string.Empty;
+    private static string DurationText(DateTime? from, DateTime? to)
+    {
+        if (!from.HasValue) return string.Empty;
+        var duration = (to ?? DateTime.Now) - from.Value;
+        if (duration < TimeSpan.Zero) return string.Empty;
+        if (duration.TotalDays >= 1) return $"{(int)duration.TotalDays}d {duration.Hours}h";
+        if (duration.TotalHours >= 1) return $"{(int)duration.TotalHours}h {duration.Minutes}m";
+        return $"{Math.Max(0, duration.Minutes)}m";
+    }
+
+    private async Task<Dictionary<int, string>> UserLookupAsync(IEnumerable<int?> ids, CancellationToken cancellationToken)
+    {
+        var userIds = ids.Where(x => x.HasValue && x.Value > 0).Select(x => x!.Value).Distinct().ToList();
+        if (userIds.Count == 0) return new Dictionary<int, string>();
+
+        return await db.AppUsers.AsNoTracking()
+            .Where(x => userIds.Contains(x.UserId))
+            .Select(x => new { x.UserId, Name = string.IsNullOrWhiteSpace(x.FullName) ? x.Username : x.FullName })
+            .ToDictionaryAsync(x => x.UserId, x => x.Name, cancellationToken);
+    }
+
+    private static string UserName(IReadOnlyDictionary<int, string> users, int? id)
+    {
+        if (!id.HasValue || id.Value <= 0) return string.Empty;
+        return users.TryGetValue(id.Value, out var name) ? name : $"User #{id.Value.ToString(CultureInfo.InvariantCulture)}";
+    }
+
     private static int Size(ReportQueryDto request) => request.PageSize <= 0 ? 50 : Math.Min(request.PageSize, 500);
     private static int Skip(ReportQueryDto request) => (Math.Max(request.PageNumber, 1) - 1) * Size(request);
 

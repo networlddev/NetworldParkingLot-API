@@ -155,6 +155,8 @@ public sealed class SettingsService(NetworldParkingDbContext db, ISystemActivity
             BarcodePrinterDirection = ReadInt(settings, "BarcodePrinterDirection", 1),
             BarcodePrintDensity = ReadInt(settings, "BarcodePrintDensity", 8),
             BarcodePrintCopies = ReadInt(settings, "BarcodePrintCopies", 1),
+            BarcodeTextScalePercent = ReadInt(settings, "BarcodeTextScalePercent", 100),
+            BarcodeSymbolScalePercent = ReadInt(settings, "BarcodeSymbolScalePercent", 100),
             BarcodeRotate90 = ReadBool(settings, "BarcodeRotate90", false),
             AutoPrintBarcodeAfterEntry = ReadBool(settings, "AutoPrintBarcodeAfterEntry", true),
             AllowBarcodeReprint = ReadBool(settings, "AllowBarcodeReprint", true),
@@ -230,18 +232,18 @@ public sealed class SettingsService(NetworldParkingDbContext db, ISystemActivity
             throw new InvalidOperationException("Barcode prefix is required.");
         if (string.IsNullOrWhiteSpace(request.Barcode.BarcodeSymbology))
             throw new InvalidOperationException("Barcode type/symbology is required.");
-        if (request.Barcode.BarcodeLabelWidthMm is < 25 or > 120)
-            throw new InvalidOperationException("Barcode label width must be between 25 and 120 mm.");
-        if (request.Barcode.BarcodeLabelHeightMm is < 15 or > 80)
-            throw new InvalidOperationException("Barcode label height must be between 15 and 80 mm.");
-        if (request.Barcode.BarcodeBarWidth is < 1 or > 4)
-            throw new InvalidOperationException("Barcode width must be between 1 and 4.");
-        if (request.Barcode.BarcodeBarHeight is < 40 or > 220)
-            throw new InvalidOperationException("Barcode height must be between 40 and 220 dots.");
-        if (request.Barcode.BarcodeSymbolWidthMm is < 10 or > 110)
-            throw new InvalidOperationException("Barcode width must be between 10 and 110 mm.");
-        if (request.Barcode.BarcodeSymbolHeightMm is < 5 or > 50)
-            throw new InvalidOperationException("Barcode height must be between 5 and 50 mm.");
+        if (request.Barcode.BarcodeLabelWidthMm is < 25 or > 160)
+            throw new InvalidOperationException("Barcode label width must be between 25 and 160 mm.");
+        if (request.Barcode.BarcodeLabelHeightMm is < 15 or > 160)
+            throw new InvalidOperationException("Barcode label height must be between 15 and 160 mm.");
+        if (request.Barcode.BarcodeBarWidth is < 1 or > 8)
+            throw new InvalidOperationException("Barcode width must be between 1 and 8.");
+        if (request.Barcode.BarcodeBarHeight is < 40 or > 700)
+            throw new InvalidOperationException("Barcode height must be between 40 and 700 dots.");
+        if (request.Barcode.BarcodeSymbolWidthMm is < 10 or > 150)
+            throw new InvalidOperationException("Barcode width must be between 10 and 150 mm.");
+        if (request.Barcode.BarcodeSymbolHeightMm is < 5 or > 110)
+            throw new InvalidOperationException("Barcode height must be between 5 and 110 mm.");
         if (request.Barcode.BarcodeMarginLeftMm is < 0 or > 30 ||
             request.Barcode.BarcodeMarginTopMm is < 0 or > 30 ||
             request.Barcode.BarcodeMarginRightMm is < 0 or > 30 ||
@@ -263,6 +265,10 @@ public sealed class SettingsService(NetworldParkingDbContext db, ISystemActivity
             throw new InvalidOperationException("Barcode print density must be between 1 and 15.");
         if (request.Barcode.BarcodePrintCopies is < 1 or > 5)
             throw new InvalidOperationException("Barcode print copies must be between 1 and 5.");
+        if (request.Barcode.BarcodeTextScalePercent is < 60 or > 250)
+            throw new InvalidOperationException("Barcode label text scale must be between 60 and 250 percent.");
+        if (request.Barcode.BarcodeSymbolScalePercent is < 60 or > 250)
+            throw new InvalidOperationException("Barcode symbol scale must be between 60 and 250 percent.");
 
         if (string.IsNullOrWhiteSpace(request.Invoice.InvoicePrefix))
             throw new InvalidOperationException("Invoice prefix is required.");
@@ -319,6 +325,8 @@ public sealed class SettingsService(NetworldParkingDbContext db, ISystemActivity
             ["BarcodePrinterDirection"] = Value(b.BarcodePrinterDirection, "TSPL print direction 0 or 1"),
             ["BarcodePrintDensity"] = Value(b.BarcodePrintDensity, "Thermal barcode print density"),
             ["BarcodePrintCopies"] = Value(b.BarcodePrintCopies, "Default barcode print copies"),
+            ["BarcodeTextScalePercent"] = Value(b.BarcodeTextScalePercent, "Barcode label content text scale percentage"),
+            ["BarcodeSymbolScalePercent"] = Value(b.BarcodeSymbolScalePercent, "Barcode symbol scale percentage"),
             ["BarcodeRotate90"] = Value(b.BarcodeRotate90, "Rotate barcode image label by 90 degrees"),
             ["AutoPrintBarcodeAfterEntry"] = Value(b.AutoPrintBarcodeAfterEntry, "Automatically print barcode after generation in supported screens"),
             ["AllowBarcodeReprint"] = Value(b.AllowBarcodeReprint, "Allow reprinting barcode labels"),

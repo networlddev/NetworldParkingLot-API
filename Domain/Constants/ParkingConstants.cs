@@ -69,5 +69,6 @@ public static class ParkingConstants
         public const string OverstayDetected = "OverstayDetected";
         public const string InvalidBarcode = "InvalidBarcode";
         public const string EntryAllowed = "EntryAllowed";
+        public const string ForceExit = "ForceExit";
     }
 }

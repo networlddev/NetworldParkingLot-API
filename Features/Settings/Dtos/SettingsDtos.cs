@@ -64,6 +64,8 @@ public sealed class BarcodeSettingsDto
     public int BarcodePrinterDirection { get; set; } = 1;
     public int BarcodePrintDensity { get; set; } = 8;
     public int BarcodePrintCopies { get; set; } = 1;
+    public int BarcodeTextScalePercent { get; set; } = 100;
+    public int BarcodeSymbolScalePercent { get; set; } = 100;
     public bool BarcodeRotate90 { get; set; }
     public bool AutoPrintBarcodeAfterEntry { get; set; } = true;
     public bool AllowBarcodeReprint { get; set; } = true;

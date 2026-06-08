@@ -62,6 +62,8 @@ public sealed class ScanExitRequest
     public string BarcodeNo { get; set; } = string.Empty;
 
     public int OperatorId { get; set; }
+
+    public bool SaveDisplayEvent { get; set; } = true;
 }
 
 public sealed class AllowExitRequest

@@ -10,9 +10,18 @@ public static class BarcodeLabelImageGenerator
     public static byte[] GenerateLabelPng(
         string projectName,
         string companyName,
+        string? companyCode,
+        string? companyContact,
+        string? companyMobile,
+        string? companyTrn,
         string vehicleReference,
+        string? vehicleType,
+        string? driverName,
+        string? driverMobile,
         string barcodeNo,
+        string entryTime,
         string validUntil,
+        string subscriptionText,
         string note,
         int widthMm,
         int heightMm,
@@ -21,6 +30,8 @@ public static class BarcodeLabelImageGenerator
         int marginTopMm,
         int marginRightMm,
         int marginBottomMm,
+        int textScalePercent,
+        int symbolScalePercent,
         bool rotate90)
     {
         var widthPx = MmToPx(widthMm, dpi);
@@ -49,18 +60,41 @@ public static class BarcodeLabelImageGenerator
             IsAntialias = true
         };
 
-        // 60mm x 35mm at 203 DPI is around 480 x 280 px.
-        // These positions are intentionally pixel-based to keep the final printed image stable.
-        var topOffset = marginTopPx - ScaleY(16, heightPx);
-        DrawCenteredText(canvas, Safe(projectName, 34), contentCenterX, topOffset + ScaleY(22, heightPx), ScaleFont(15, heightPx), true, black);
-        DrawCenteredText(canvas, Safe(companyName, 38), contentCenterX, topOffset + ScaleY(43, heightPx), ScaleFont(12, heightPx), true, black);
-        DrawCenteredText(canvas, Safe(vehicleReference, 30), contentCenterX, topOffset + ScaleY(68, heightPx), ScaleFont(18, heightPx), true, black);
+        var largeLabel = heightMm >= 90 || widthMm >= 90;
+        var y = marginTopPx + ScaleY(largeLabel ? 16 : 6, heightPx);
+        DrawCenteredText(canvas, Safe(projectName, 42), contentCenterX, y, ScaleFont(largeLabel ? 10 : 15, heightPx, textScalePercent), true, black);
+        y += ScaleY(largeLabel ? 19 : 21, heightPx);
+        DrawCenteredText(canvas, Safe(companyName, 52), contentCenterX, y, ScaleFont(largeLabel ? 12 : 12, heightPx, textScalePercent), true, black);
 
-        var barcodeTop = topOffset + ScaleY(84, heightPx);
+        if (largeLabel)
+        {
+            y += ScaleY(17, heightPx);
+            DrawText(canvas, $"Code: {Safe(companyCode, 22)}", contentLeft, y, ScaleFont(6.5f, heightPx, textScalePercent), false, gray);
+            DrawText(canvas, $"Mobile: {Safe(companyMobile, 22)}", contentLeft + ((contentRight - contentLeft) / 2f), y, ScaleFont(6.5f, heightPx, textScalePercent), false, gray);
+            y += ScaleY(14, heightPx);
+            DrawText(canvas, $"Contact: {Safe(companyContact, 28)}", contentLeft, y, ScaleFont(6.5f, heightPx, textScalePercent), false, gray);
+            DrawText(canvas, $"TRN: {Safe(companyTrn, 24)}", contentLeft + ((contentRight - contentLeft) / 2f), y, ScaleFont(6.5f, heightPx, textScalePercent), false, gray);
+            y += ScaleY(16, heightPx);
+            DrawText(canvas, $"Subscription: {Safe(subscriptionText, 72)}", contentLeft, y, ScaleFont(6.8f, heightPx, textScalePercent), false, black);
+            y += ScaleY(16, heightPx);
+            DrawText(canvas, $"Entry: {Safe(entryTime, 24)}", contentLeft, y, ScaleFont(6.8f, heightPx, textScalePercent), false, black);
+            DrawText(canvas, $"Valid Until: {Safe(validUntil, 24)}", contentLeft + ((contentRight - contentLeft) / 2f), y, ScaleFont(6.8f, heightPx, textScalePercent), false, black);
+            y += ScaleY(20, heightPx);
+            DrawText(canvas, $"Vehicle: {Safe(vehicleType, 18)}  {Safe(vehicleReference, 28)}", contentLeft, y, ScaleFont(8f, heightPx, textScalePercent), true, black);
+            y += ScaleY(16, heightPx);
+            DrawText(canvas, $"Driver: {Safe(driverName, 28)}  {Safe(driverMobile, 22)}", contentLeft, y, ScaleFont(6.5f, heightPx, textScalePercent), false, gray);
+        }
+        else
+        {
+            y += ScaleY(25, heightPx);
+            DrawCenteredText(canvas, Safe(vehicleReference, 30), contentCenterX, y, ScaleFont(18, heightPx, textScalePercent), true, black);
+        }
+
+        var barcodeTop = y + ScaleY(largeLabel ? 18 : 16, heightPx);
         var barcodeLeft = contentLeft;
         var barcodeRight = contentRight;
-        var maxBarcodeHeight = heightPx - marginBottomPx - barcodeTop - ScaleY(64, heightPx);
-        var barcodeHeight = Math.Max(ScaleY(35, heightPx), Math.Min(ScaleY(82, heightPx), maxBarcodeHeight));
+        var maxBarcodeHeight = heightPx - marginBottomPx - barcodeTop - ScaleY(largeLabel ? 48 : 64, heightPx);
+        var barcodeHeight = Math.Max(ScaleY(largeLabel ? 72 : 35, heightPx), Math.Min(ScaleY(largeLabel ? 118 : 82, heightPx) * (symbolScalePercent / 100f), maxBarcodeHeight));
 
         using var barcodeBitmap = GenerateCode128Bitmap(
             barcodeNo,
@@ -71,9 +105,10 @@ public static class BarcodeLabelImageGenerator
             barcodeBitmap,
             new SKRect(barcodeLeft, barcodeTop, barcodeRight, barcodeTop + barcodeHeight));
 
-        DrawCenteredText(canvas, Safe(barcodeNo, 34), contentCenterX, barcodeTop + barcodeHeight + ScaleY(20, heightPx), ScaleFont(12, heightPx), true, black);
-        DrawCenteredText(canvas, Safe($"Valid Until: {validUntil}", 42), contentCenterX, barcodeTop + barcodeHeight + ScaleY(41, heightPx), ScaleFont(9, heightPx), false, gray);
-        DrawCenteredText(canvas, Safe(note, 46), contentCenterX, barcodeTop + barcodeHeight + ScaleY(60, heightPx), ScaleFont(8.5f, heightPx), false, gray);
+        DrawCenteredText(canvas, Safe(barcodeNo, 44), contentCenterX, barcodeTop + barcodeHeight + ScaleY(largeLabel ? 18 : 20, heightPx), ScaleFont(largeLabel ? 8.5f : 12, heightPx, textScalePercent), true, black);
+        if (!largeLabel)
+            DrawCenteredText(canvas, Safe($"Valid Until: {validUntil}", 42), contentCenterX, barcodeTop + barcodeHeight + ScaleY(41, heightPx), ScaleFont(9, heightPx, textScalePercent), false, gray);
+        DrawCenteredText(canvas, Safe(note, 62), contentCenterX, barcodeTop + barcodeHeight + ScaleY(largeLabel ? 34 : 60, heightPx), ScaleFont(largeLabel ? 6.2f : 8.5f, heightPx, textScalePercent), false, gray);
 
         using var image = surface.Snapshot();
 
@@ -127,6 +162,26 @@ public static class BarcodeLabelImageGenerator
         canvas.DrawText(text, centerX - (textWidth / 2f), baselineY, font, paint);
     }
 
+    private static void DrawText(
+        SKCanvas canvas,
+        string text,
+        float x,
+        float baselineY,
+        float fontSize,
+        bool bold,
+        SKPaint paint)
+    {
+        using var font = new SKFont
+        {
+            Size = fontSize,
+            Typeface = SKTypeface.FromFamilyName(
+                "Arial",
+                bold ? SKFontStyle.Bold : SKFontStyle.Normal)
+        };
+
+        canvas.DrawText(text, x, baselineY, font, paint);
+    }
+
     private static SKBitmap RotateImage90(SKImage image)
     {
         using var bitmap = SKBitmap.FromImage(image);
@@ -146,7 +201,7 @@ public static class BarcodeLabelImageGenerator
 
     private static float ScaleX(float value, int actualWidthPx) => value / 480f * actualWidthPx;
     private static float ScaleY(float value, int actualHeightPx) => value / 280f * actualHeightPx;
-    private static float ScaleFont(float value, int actualHeightPx) => Math.Max(6f, value / 280f * actualHeightPx);
+    private static float ScaleFont(float value, int actualHeightPx, int scalePercent = 100) => Math.Max(6f, value / 280f * actualHeightPx * (Math.Clamp(scalePercent, 60, 250) / 100f));
 
     private static string Safe(string? value, int maxLength)
     {

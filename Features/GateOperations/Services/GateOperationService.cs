@@ -782,6 +782,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             .ToDictionaryAsync(x => x.CompanyId, x => x.Count, cancellationToken);
 
         var today = DateTime.Today;
+        var users = await ResolveUserDisplayNamesAsync(subscriptions.SelectMany(x => new[] { x.CreatedBy, x.ModifiedBy }), cancellationToken);
         var items = new List<SubscriptionListItemDto>();
         foreach (var subscription in subscriptions)
         {
@@ -815,6 +816,9 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                 invoice?.Status,
                 insideCount,
                 subscription.CreatedDate,
+                subscription.ModifiedDate,
+                UserDisplayName(users, subscription.CreatedBy),
+                UserDisplayName(users, subscription.ModifiedBy),
                 subscription.Remarks,
                 subscription.CancellationReason));
         }
@@ -1029,7 +1033,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
     public async Task<ExitScanResultDto> ScanExitBarcodeAsync(ScanExitRequest request, CancellationToken cancellationToken = default)
     {
         var barcode = request.BarcodeNo.Trim().ToUpperInvariant();
-        var result = await BuildExitScanResultAsync(barcode, request.OperatorId, true, cancellationToken);
+        var result = await BuildExitScanResultAsync(barcode, request.OperatorId, request.SaveDisplayEvent, cancellationToken);
         return result;
     }
 
@@ -1072,8 +1076,11 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         session.OverstayDays = scan.OverstayDays;
         session.OverstayAmount = scan.OverstayAmount;
 
-        var status = session.ForceExit ? "Exit Allowed With Warning" : "Clear To Exit";
-        await AddActivityAsync(ParkingConstants.GateActionType.ExitAllowed, session.CompanyId, session.SessionId, session.BarcodeNo, session.PlateNo, status, status, request.OperatorId, cancellationToken, new List<SystemActivityChange>
+        var status = session.ForceExit ? "Force Exit With Pending Amount" : "Clear To Exit";
+        var activityMessage = session.ForceExit
+            ? $"WARNING: Force exit approved with pending amount AED {scan.TotalPayable:n2}. Reason: {session.ForceExitReason}"
+            : status;
+        await AddActivityAsync(ParkingConstants.GateActionType.ExitAllowed, session.CompanyId, session.SessionId, session.BarcodeNo, session.PlateNo, status, activityMessage, request.OperatorId, cancellationToken, new List<SystemActivityChange>
         {
             new("Status", oldStatus, session.Status),
             new("BarcodeStatus", oldBarcodeStatus, session.BarcodeStatus),
@@ -1084,7 +1091,21 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             new("OverstayDays", AuditValue(oldOverstayDays), AuditValue(session.OverstayDays)),
             new("OverstayAmount", AuditValue(oldOverstayAmount), AuditValue(session.OverstayAmount))
         });
-        await AddOutsideDisplayAsync(session, ParkingConstants.OutsideDisplayStatus.ClearToExit, "CLEAR TO EXIT", "Thank you. Please proceed.", 0, 0, cancellationToken);
+        if (session.ForceExit)
+        {
+            await AddOutsideDisplayAsync(
+                session,
+                ParkingConstants.OutsideDisplayStatus.ForceExit,
+                "FORCE EXIT APPROVED",
+                $"Reason: {session.ForceExitReason}",
+                scan.TotalPayable,
+                scan.OverstayDays,
+                cancellationToken);
+        }
+        else
+        {
+            await AddOutsideDisplayAsync(session, ParkingConstants.OutsideDisplayStatus.ClearToExit, "CLEAR TO EXIT", "Thank you. Please proceed.", 0, 0, cancellationToken);
+        }
         await repository.SaveChangesAsync(cancellationToken);
 
         return new ExitResultDto(session.SessionId, session.BarcodeNo, session.PlateNo, session.Company.CompanyName, session.ExitTime.Value, session.BarcodeStatus, session.Status, "Exit completed. Barcode is now used and cannot be reused.");
@@ -1550,7 +1571,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             .FirstOrDefaultAsync(x => x.InvoiceId == invoiceId, cancellationToken)
             ?? throw new InvalidOperationException("Invoice not found.");
 
-        return ToInvoiceListItem(invoice);
+        var users = await ResolveUserDisplayNamesAsync(new[] { invoice.CreatedBy, invoice.ModifiedBy }, cancellationToken);
+        return ToInvoiceListItem(invoice, users);
     }
 
     public async Task<IReadOnlyList<InvoicePaymentDto>> GetInvoicePaymentsAsync(int invoiceId, CancellationToken cancellationToken = default)
@@ -1567,6 +1589,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             .OrderByDescending(x => x.PaymentDate)
             .ThenByDescending(x => x.PaymentId)
             .ToListAsync(cancellationToken);
+        var users = await ResolveUserDisplayNamesAsync(payments.Select(x => (int?)x.ReceivedBy), cancellationToken);
 
         return payments.Select(x => new InvoicePaymentDto(
             x.PaymentId,
@@ -1579,7 +1602,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             x.ReferenceNo,
             x.PaymentDate,
             x.Remarks,
-            x.ReceivedBy)).ToList();
+            x.ReceivedBy,
+            UserDisplayName(users, x.ReceivedBy))).ToList();
     }
 
     public async Task<InvoiceListItemDto> CreateInvoiceAsync(CreateInvoiceRequest request, CancellationToken cancellationToken = default)
@@ -1654,64 +1678,9 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         return await GetInvoiceByIdAsync(invoice.InvoiceId, cancellationToken);
     }
 
-    public async Task<InvoiceListItemDto> UpdateInvoiceAsync(int invoiceId, UpdateInvoiceRequest request, CancellationToken cancellationToken = default)
+    public Task<InvoiceListItemDto> UpdateInvoiceAsync(int invoiceId, UpdateInvoiceRequest request, CancellationToken cancellationToken = default)
     {
-        var invoice = await db.ParkingInvoices.Include(x => x.Company).FirstOrDefaultAsync(x => x.InvoiceId == invoiceId, cancellationToken)
-            ?? throw new InvalidOperationException("Invoice not found.");
-
-        if (invoice.Status.Equals("Cancelled", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Cancelled invoice cannot be edited.");
-
-        var subTotal = Math.Max(request.SubTotal, 0);
-        var discount = Math.Max(request.DiscountAmount, 0);
-        var vat = Math.Max(request.VatAmount, 0);
-        var total = request.TotalAmount > 0 ? request.TotalAmount : subTotal - discount + vat;
-        if (total < 0)
-            throw new InvalidOperationException("Invoice total cannot be negative.");
-        if (total < invoice.PaidAmount)
-            throw new InvalidOperationException($"Invoice total cannot be less than already paid amount AED {invoice.PaidAmount:n2}.");
-
-        var newInvoiceType = NormalizeInvoiceType(request.InvoiceType);
-        var newInvoiceDate = request.InvoiceDate == default ? invoice.InvoiceDate : request.InvoiceDate;
-        var newPlanType = TrimOrNull(request.PlanType);
-        var newSlots = Math.Max(request.Slots, 0);
-        var newBalance = total - invoice.PaidAmount;
-        var newStatus = GetInvoiceStatus(newBalance, invoice.PaidAmount);
-        var newRemarks = TrimOrNull(request.Remarks);
-        var changes = new List<SystemActivityChange>
-        {
-            new("InvoiceType", invoice.InvoiceType, newInvoiceType),
-            new("InvoiceDate", AuditValue(invoice.InvoiceDate), AuditValue(newInvoiceDate)),
-            new("DueDate", AuditValue(invoice.DueDate), AuditValue(request.DueDate)),
-            new("PlanType", invoice.PlanType, newPlanType),
-            new("Slots", AuditValue(invoice.Slots), AuditValue(newSlots)),
-            new("SubTotal", AuditValue(invoice.SubTotal), AuditValue(subTotal)),
-            new("DiscountAmount", AuditValue(invoice.DiscountAmount), AuditValue(discount)),
-            new("VatAmount", AuditValue(invoice.VatAmount), AuditValue(vat)),
-            new("TotalAmount", AuditValue(invoice.TotalAmount), AuditValue(total)),
-            new("BalanceAmount", AuditValue(invoice.BalanceAmount), AuditValue(newBalance)),
-            new("Status", invoice.Status, newStatus),
-            new("Remarks", invoice.Remarks, newRemarks)
-        };
-
-        invoice.InvoiceType = newInvoiceType;
-        invoice.InvoiceDate = newInvoiceDate;
-        invoice.DueDate = request.DueDate;
-        invoice.PlanType = newPlanType;
-        invoice.Slots = newSlots;
-        invoice.SubTotal = subTotal;
-        invoice.DiscountAmount = discount;
-        invoice.VatAmount = vat;
-        invoice.TotalAmount = total;
-        invoice.BalanceAmount = newBalance;
-        invoice.Status = newStatus;
-        invoice.Remarks = newRemarks;
-        invoice.ModifiedDate = DateTime.Now;
-        invoice.ModifiedBy = request.OperatorId;
-
-        await AddActivityAsync("InvoiceUpdated", invoice.CompanyId, invoice.SessionId, null, null, "Invoice Updated", $"Invoice {invoice.InvoiceNo} updated.", request.OperatorId, cancellationToken, changes, "ParkingInvoice", invoice.InvoiceId.ToString());
-        await db.SaveChangesAsync(cancellationToken);
-        return ToInvoiceListItem(invoice);
+        throw new InvalidOperationException("Invoice cannot be edited once it has been created. Use cancel invoice and create a new invoice if a correction is required.");
     }
 
     public async Task<InvoiceListItemDto> CancelInvoiceAsync(int invoiceId, CancelInvoiceRequest request, CancellationToken cancellationToken = default)
@@ -1989,7 +1958,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             .Where(x => x.SessionId == session.SessionId)
             .OrderByDescending(x => x.InvoiceDate)
             .ToListAsync(cancellationToken);
-        var invoiceItems = invoices.Select(ToInvoiceListItem).ToList();
+        var invoiceUsers = await ResolveUserDisplayNamesAsync(invoices.SelectMany(x => new[] { x.CreatedBy, x.ModifiedBy }), cancellationToken);
+        var invoiceItems = invoices.Select(x => ToInvoiceListItem(x, invoiceUsers)).ToList();
         var invoiceIds = invoices.Select(x => x.InvoiceId).ToList();
 
         var payments = await db.ParkingPayments
@@ -1998,6 +1968,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             .OrderByDescending(x => x.PaymentDate)
             .ThenByDescending(x => x.PaymentId)
             .ToListAsync(cancellationToken);
+        var paymentUsers = await ResolveUserDisplayNamesAsync(payments.Select(x => (int?)x.ReceivedBy), cancellationToken);
 
         var paymentItems = payments.Select(x => new InvoicePaymentDto(
             x.PaymentId,
@@ -2010,7 +1981,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             x.ReferenceNo,
             x.PaymentDate,
             x.Remarks,
-            x.ReceivedBy)).ToList();
+            x.ReceivedBy,
+            UserDisplayName(paymentUsers, x.ReceivedBy))).ToList();
 
         var history = await db.GateActivityLogs
             .AsNoTracking()
@@ -2083,8 +2055,14 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
     public async Task<OutsideDisplayDto?> GetLatestOutsideDisplayAsync(CancellationToken cancellationToken = default)
     {
+        var settings = await repository.GetSettingsAsync(cancellationToken);
+        var autoClearSeconds = GetIntSetting(settings, "OutsideDisplayAutoClearSeconds", 10);
+        autoClearSeconds = Math.Clamp(autoClearSeconds, 3, 120);
+        var cutoff = DateTime.Now.AddSeconds(-autoClearSeconds);
+
         var item = await db.OutsideDisplayEvents
             .AsNoTracking()
+            .Where(x => x.CreatedDate >= cutoff)
             .OrderByDescending(x => x.DisplayEventId)
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -2174,6 +2152,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             })
             .ToDictionaryAsync(x => x.CompanyId, cancellationToken);
 
+        var users = await ResolveUserDisplayNamesAsync(companies.SelectMany(x => new[] { x.CreatedBy, x.ModifiedBy }), cancellationToken);
         var items = new List<CompanyListItemDto>();
         foreach (var company in companies)
         {
@@ -2228,7 +2207,10 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                 selectedSub?.StartDate,
                 selectedSub?.EndDate,
                 stat?.LastInvoiceDate,
-                company.CreatedDate));
+                company.CreatedDate,
+                company.ModifiedDate,
+                UserDisplayName(users, company.CreatedBy),
+                UserDisplayName(users, company.ModifiedBy)));
         }
 
         return ApplyCompanyListPostFilters(items, request).ToList();
@@ -2978,6 +2960,38 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         return $"User #{operatorId}";
     }
 
+    private async Task<Dictionary<int, string>> ResolveUserDisplayNamesAsync(IEnumerable<int?> operatorIds, CancellationToken cancellationToken)
+    {
+        var ids = operatorIds
+            .Where(x => x.HasValue && x.Value > 0)
+            .Select(x => x!.Value)
+            .Distinct()
+            .ToList();
+
+        if (ids.Count == 0)
+            return [];
+
+        return await db.AppUsers
+            .AsNoTracking()
+            .Where(x => ids.Contains(x.UserId))
+            .Select(x => new
+            {
+                x.UserId,
+                Name = string.IsNullOrWhiteSpace(x.FullName) ? x.Username : x.FullName
+            })
+            .ToDictionaryAsync(x => x.UserId, x => string.IsNullOrWhiteSpace(x.Name) ? $"User #{x.UserId}" : x.Name.Trim(), cancellationToken);
+    }
+
+    private static string UserDisplayName(IReadOnlyDictionary<int, string>? users, int? userId)
+    {
+        if (!userId.HasValue || userId.Value <= 0)
+            return "-";
+
+        return users != null && users.TryGetValue(userId.Value, out var name) && !string.IsNullOrWhiteSpace(name)
+            ? name
+            : $"User #{userId.Value}";
+    }
+
     private static string? AuditValue(object? value)
     {
         return value switch
@@ -3061,6 +3075,9 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (displayStatus.Equals(ParkingConstants.OutsideDisplayStatus.InvalidBarcode, StringComparison.OrdinalIgnoreCase))
             return (GetStringSetting(settings, "OutsideDisplayInvalidMainMessage", mainMessage), GetStringSetting(settings, "OutsideDisplayInvalidSubMessage", subMessage ?? string.Empty));
 
+        if (displayStatus.Equals(ParkingConstants.OutsideDisplayStatus.ForceExit, StringComparison.OrdinalIgnoreCase))
+            return (mainMessage, subMessage);
+
         return (mainMessage, subMessage);
     }
 
@@ -3136,7 +3153,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         else if (tab.Equals("Overstay", StringComparison.OrdinalIgnoreCase))
             list = list.Where(x => x.InvoiceType.Equals("Overstay", StringComparison.OrdinalIgnoreCase)).ToList();
 
-        return list.Select(ToInvoiceListItem).ToList();
+        var users = await ResolveUserDisplayNamesAsync(list.SelectMany(x => new[] { x.CreatedBy, x.ModifiedBy }), cancellationToken);
+        return list.Select(x => ToInvoiceListItem(x, users)).ToList();
     }
 
     private static IEnumerable<InvoiceListItemDto> SortInvoices(IEnumerable<InvoiceListItemDto> rows, string? sortBy, string? sortDirection)
@@ -3158,7 +3176,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         };
     }
 
-    private static InvoiceListItemDto ToInvoiceListItem(ParkingInvoice x) => new(
+    private static InvoiceListItemDto ToInvoiceListItem(ParkingInvoice x, IReadOnlyDictionary<int, string>? users = null) => new(
         x.InvoiceId,
         x.InvoiceNo,
         x.CompanyId,
@@ -3180,6 +3198,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         x.SessionId,
         x.CreatedDate,
         x.ModifiedDate,
+        UserDisplayName(users, x.CreatedBy),
+        UserDisplayName(users, x.ModifiedBy),
         x.Remarks,
         x.CancellationReason);
 
@@ -3388,6 +3408,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         var sessions = sessionIds.Count == 0
             ? new Dictionary<int, string>()
             : await db.ParkingSessions.AsNoTracking().Where(x => sessionIds.Contains(x.SessionId)).ToDictionaryAsync(x => x.SessionId, x => x.BarcodeNo, cancellationToken);
+        var users = await ResolveUserDisplayNamesAsync(payments.Select(x => (int?)x.ReceivedBy), cancellationToken);
 
         return payments.Select(x => new PaymentListItemDto(
             x.PaymentId,
@@ -3405,7 +3426,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             x.ReferenceNo,
             x.PaymentDate,
             x.Remarks,
-            x.ReceivedBy)).ToList();
+            x.ReceivedBy,
+            UserDisplayName(users, x.ReceivedBy))).ToList();
     }
 
     private async Task<decimal> GetSubscriptionPendingAmountAsync(int companyId, CancellationToken cancellationToken)
