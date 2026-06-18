@@ -8,12 +8,12 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM dbo.SystemSettings WHERE SettingKey = 'BarcodeSymbolWidthMm')
     BEGIN
         INSERT INTO dbo.SystemSettings (SettingKey, SettingValue, Remarks)
-        VALUES ('BarcodeSymbolWidthMm', '48', 'Barcode symbol width in millimeters');
+        VALUES ('BarcodeSymbolWidthMm', '90', 'Barcode symbol width in millimeters');
     END
 
     IF NOT EXISTS (SELECT 1 FROM dbo.SystemSettings WHERE SettingKey = 'BarcodeSymbolHeightMm')
     BEGIN
         INSERT INTO dbo.SystemSettings (SettingKey, SettingValue, Remarks)
-        VALUES ('BarcodeSymbolHeightMm', '12', 'Barcode symbol height in millimeters');
+        VALUES ('BarcodeSymbolHeightMm', '35', 'Barcode symbol height in millimeters');
     END
 END

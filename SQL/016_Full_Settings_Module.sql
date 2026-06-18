@@ -1,5 +1,5 @@
 /*
-Networld Parking Lot - Full Settings Module
+NETWORLD SMART PARKING - Full Settings Module
 Run this script after the previous SQL patches.
 It seeds editable system settings and adds Settings permissions.
 */
@@ -31,10 +31,10 @@ INSERT INTO @Settings (SettingKey, SettingValue, Remarks) VALUES
 ('BarcodeSymbology', '128', 'Barcode type/symbology. Default is Code 128'),
 ('BarcodePrinterName', '', 'Installed Windows printer name for barcode labels'),
 ('BarcodePrinterType', 'ThermalLabel', 'Barcode printer type'),
-('BarcodePrinterLanguage', 'TSPL', 'Barcode printer command language: TSPL or ZPL'),
+('BarcodePrinterLanguage', 'ZPL', 'Barcode printer command language: TSPL or ZPL'),
 ('BarcodePrintMode', 'Command', 'Barcode printing mode: Command or Image'),
-('BarcodeLabelWidthMm', '60', 'Barcode label width in millimeters'),
-('BarcodeLabelHeightMm', '35', 'Barcode label height in millimeters'),
+('BarcodeLabelWidthMm', '100', 'Barcode label width in millimeters'),
+('BarcodeLabelHeightMm', '110', 'Barcode label height in millimeters'),
 ('BarcodePrinterDpi', '203', 'Barcode label printer DPI'),
 ('BarcodePrinterDirection', '1', 'TSPL print direction 0 or 1'),
 ('BarcodePrintDensity', '8', 'Thermal barcode print density'),
@@ -43,7 +43,7 @@ INSERT INTO @Settings (SettingKey, SettingValue, Remarks) VALUES
 ('AutoPrintBarcodeAfterEntry', 'true', 'Automatically print barcode after generation in supported screens'),
 ('AllowBarcodeReprint', 'true', 'Allow reprinting barcode labels'),
 ('BarcodeShowHumanReadable', 'true', 'Show barcode number below barcode'),
-('BarcodeLabelTitle', 'NETWORLD PARKING LOT', 'Barcode label title'),
+('BarcodeLabelTitle', 'NETWORLD SMART PARKING', 'Barcode label title'),
 ('BarcodeLabelNote', 'One parking session only', 'Barcode label footer note'),
 
 ('InvoicePrefix', 'INV', 'Invoice number prefix'),

@@ -48,18 +48,18 @@ public sealed class BarcodeSettingsDto
     public string BarcodeSymbology { get; set; } = "128";
     public string BarcodePrinterName { get; set; } = string.Empty;
     public string BarcodePrinterType { get; set; } = "ThermalLabel";
-    public string BarcodePrinterLanguage { get; set; } = "TSPL";
+    public string BarcodePrinterLanguage { get; set; } = "ZPL";
     public string BarcodePrintMode { get; set; } = "Command";
-    public int BarcodeLabelWidthMm { get; set; } = 60;
-    public int BarcodeLabelHeightMm { get; set; } = 35;
+    public int BarcodeLabelWidthMm { get; set; } = 100;
+    public int BarcodeLabelHeightMm { get; set; } = 110;
     public int BarcodeBarWidth { get; set; } = 2;
     public int BarcodeBarHeight { get; set; } = 78;
-    public int BarcodeSymbolWidthMm { get; set; } = 48;
-    public int BarcodeSymbolHeightMm { get; set; } = 12;
+    public int BarcodeSymbolWidthMm { get; set; } = 90;
+    public int BarcodeSymbolHeightMm { get; set; } = 35;
     public int BarcodeMarginLeftMm { get; set; } = 5;
-    public int BarcodeMarginTopMm { get; set; } = 2;
+    public int BarcodeMarginTopMm { get; set; } = 5;
     public int BarcodeMarginRightMm { get; set; } = 5;
-    public int BarcodeMarginBottomMm { get; set; } = 2;
+    public int BarcodeMarginBottomMm { get; set; } = 5;
     public int BarcodePrinterDpi { get; set; } = 203;
     public int BarcodePrinterDirection { get; set; } = 1;
     public int BarcodePrintDensity { get; set; } = 8;
@@ -70,7 +70,7 @@ public sealed class BarcodeSettingsDto
     public bool AutoPrintBarcodeAfterEntry { get; set; } = true;
     public bool AllowBarcodeReprint { get; set; } = true;
     public bool BarcodeShowHumanReadable { get; set; } = true;
-    public string BarcodeLabelTitle { get; set; } = "NETWORLD PARKING LOT";
+    public string BarcodeLabelTitle { get; set; } = "NETWORLD SMART PARKING";
     public string BarcodeLabelNote { get; set; } = "One parking session only";
 }
 

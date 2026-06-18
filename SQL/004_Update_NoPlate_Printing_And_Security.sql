@@ -42,6 +42,6 @@ GO
 IF NOT EXISTS (SELECT 1 FROM dbo.SystemSettings WHERE SettingKey = 'BarcodePrinterLanguage')
 BEGIN
     INSERT INTO dbo.SystemSettings (SettingKey, SettingValue, Description)
-    VALUES ('BarcodePrinterLanguage', 'TSPL', 'Barcode printer command language: TSPL or ZPL');
+    VALUES ('BarcodePrinterLanguage', 'ZPL', 'Barcode printer command language: TSPL or ZPL');
 END
 GO

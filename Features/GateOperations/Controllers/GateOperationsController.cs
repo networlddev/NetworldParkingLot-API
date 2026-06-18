@@ -332,6 +332,22 @@ public sealed class GateOperationsController(IGateOperationService service, ISys
     }
 
     [RequireParkingPermission("gate_operation", "entry")]
+    [HttpPost("entry/update-generated-barcode-details")]
+    public async Task<ActionResult<ApiResponse<GenerateBarcodeResponseDto>>> UpdateGeneratedBarcodeDetails([FromBody] UpdateGeneratedBarcodeDetailsRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.UpdateGeneratedBarcodeDetailsAsync(StampOperator(request), cancellationToken);
+            return Ok(ApiResponse<GenerateBarcodeResponseDto>.Ok(data, "Barcode details updated."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            await RecordGateFailureAsync(ParkingConstants.GateActionType.BarcodeGenerated, "ParkingSession", request.SessionId.ToString(), "Barcode detail update failed", ex.Message, cancellationToken);
+            return BadRequest(ApiResponse<GenerateBarcodeResponseDto>.Fail(ex.Message));
+        }
+    }
+
+    [RequireParkingPermission("gate_operation", "entry")]
     [HttpPost("entry/allow")]
     public async Task<ActionResult<ApiResponse<EntryResultDto>>> AllowEntry([FromBody] AllowEntryRequest request, CancellationToken cancellationToken)
     {

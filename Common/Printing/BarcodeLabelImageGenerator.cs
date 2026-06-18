@@ -19,7 +19,8 @@ public static class BarcodeLabelImageGenerator
         string? driverName,
         string? driverMobile,
         string barcodeNo,
-        string entryTime,
+        string stickerCreatedTime,
+        string entryNumberText,
         string validUntil,
         string subscriptionText,
         string note,
@@ -64,7 +65,7 @@ public static class BarcodeLabelImageGenerator
         var y = marginTopPx + ScaleY(largeLabel ? 16 : 6, heightPx);
         DrawCenteredText(canvas, Safe(projectName, 42), contentCenterX, y, ScaleFont(largeLabel ? 10 : 15, heightPx, textScalePercent), true, black);
         y += ScaleY(largeLabel ? 19 : 21, heightPx);
-        DrawCenteredText(canvas, Safe(companyName, 52), contentCenterX, y, ScaleFont(largeLabel ? 12 : 12, heightPx, textScalePercent), true, black);
+        DrawCenteredText(canvas, Safe($"Company : {companyName}", 64), contentCenterX, y, ScaleFont(largeLabel ? 12 : 12, heightPx, textScalePercent), true, black);
 
         if (largeLabel)
         {
@@ -77,9 +78,11 @@ public static class BarcodeLabelImageGenerator
             y += ScaleY(16, heightPx);
             DrawText(canvas, $"Subscription: {Safe(subscriptionText, 72)}", contentLeft, y, ScaleFont(6.8f, heightPx, textScalePercent), false, black);
             y += ScaleY(16, heightPx);
-            DrawText(canvas, $"Entry: {Safe(entryTime, 24)}", contentLeft, y, ScaleFont(6.8f, heightPx, textScalePercent), false, black);
+            DrawText(canvas, $"Entry Number: {Safe(entryNumberText, 24)}", contentLeft, y, ScaleFont(6.8f, heightPx, textScalePercent), true, black);
             DrawText(canvas, $"Valid Until: {Safe(validUntil, 24)}", contentLeft + ((contentRight - contentLeft) / 2f), y, ScaleFont(6.8f, heightPx, textScalePercent), false, black);
-            y += ScaleY(20, heightPx);
+            y += ScaleY(16, heightPx);
+            DrawText(canvas, $"Sticker Created: {Safe(stickerCreatedTime, 28)}", contentLeft, y, ScaleFont(6.8f, heightPx, textScalePercent), false, black);
+            y += ScaleY(18, heightPx);
             DrawText(canvas, $"Vehicle: {Safe(vehicleType, 18)}  {Safe(vehicleReference, 28)}", contentLeft, y, ScaleFont(8f, heightPx, textScalePercent), true, black);
             y += ScaleY(16, heightPx);
             DrawText(canvas, $"Driver: {Safe(driverName, 28)}  {Safe(driverMobile, 22)}", contentLeft, y, ScaleFont(6.5f, heightPx, textScalePercent), false, gray);

@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using NetworldParkingLot.Api.Common;
 using NetworldParkingLot.Api.Common.Printing;
 using NetworldParkingLot.Api.Data;
+using NetworldParkingLot.Api.Domain.Constants;
 using NetworldParkingLot.Api.Features.GateOperations.Dtos;
 using NetworldParkingLot.Api.Features.UserAccess.Filters;
 using NetworldParkingLot.Api.Infrastructure.Printing;
@@ -19,6 +20,14 @@ namespace NetworldParkingLot.Api.Features.GateOperations.Controllers;
 [Route("api/gate-operation/print")]
 public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRawPrinterService printer) : ControllerBase
 {
+    private const int DefaultBarcodeLabelWidthMm = 100;
+    private const int DefaultBarcodeLabelHeightMm = 110;
+    private const int DefaultBarcodeSymbolWidthMm = 90;
+    private const int DefaultBarcodeSymbolHeightMm = 35;
+    private const int DefaultBarcodeMarginMm = 5;
+    private const int DefaultBarcodeTextScalePercent = 100;
+    private const string DefaultBarcodePrinterLanguage = "ZPL";
+
     [RequireParkingPermission("gate_operation", "print")]
     [HttpGet("barcode-image/{barcodeNo}")]
     public async Task<ActionResult<ApiResponse<BarcodeImagePrintDto>>> GetBarcodeImage(
@@ -46,14 +55,14 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
             .AsNoTracking()
             .ToDictionaryAsync(x => x.SettingKey, x => x.SettingValue, cancellationToken);
 
-        var labelWidthMm = ClampInt(widthMm ?? ReadInt(settings, "BarcodeLabelWidthMm", 60), 25, 160);
-        var labelHeightMm = ClampInt(heightMm ?? ReadInt(settings, "BarcodeLabelHeightMm", 35), 15, 160);
+        var labelWidthMm = ClampInt(widthMm ?? ReadInt(settings, "BarcodeLabelWidthMm", DefaultBarcodeLabelWidthMm), 25, 160);
+        var labelHeightMm = ClampInt(heightMm ?? ReadInt(settings, "BarcodeLabelHeightMm", DefaultBarcodeLabelHeightMm), 15, 160);
         var labelDpi = ClampInt(dpi ?? ReadInt(settings, "BarcodePrinterDpi", 203), 150, 600);
-        var marginLeftMm = ClampInt(ReadInt(settings, "BarcodeMarginLeftMm", 5), 0, 30);
-        var marginTopMm = ClampInt(ReadInt(settings, "BarcodeMarginTopMm", 2), 0, 30);
-        var marginRightMm = ClampInt(ReadInt(settings, "BarcodeMarginRightMm", 5), 0, 30);
-        var marginBottomMm = ClampInt(ReadInt(settings, "BarcodeMarginBottomMm", 2), 0, 30);
-        var textScalePercent = ClampInt(ReadInt(settings, "BarcodeTextScalePercent", 100), 60, 250);
+        var marginLeftMm = ClampInt(ReadInt(settings, "BarcodeMarginLeftMm", DefaultBarcodeMarginMm), 0, 30);
+        var marginTopMm = ClampInt(ReadInt(settings, "BarcodeMarginTopMm", DefaultBarcodeMarginMm), 0, 30);
+        var marginRightMm = ClampInt(ReadInt(settings, "BarcodeMarginRightMm", DefaultBarcodeMarginMm), 0, 30);
+        var marginBottomMm = ClampInt(ReadInt(settings, "BarcodeMarginBottomMm", DefaultBarcodeMarginMm), 0, 30);
+        var textScalePercent = ClampInt(ReadInt(settings, "BarcodeTextScalePercent", DefaultBarcodeTextScalePercent), 60, 250);
         var symbolScalePercent = ClampInt(ReadInt(settings, "BarcodeSymbolScalePercent", 100), 60, 250);
         var shouldRotate = rotate90 ?? ReadBool(settings, "BarcodeRotate90", false);
 
@@ -61,9 +70,10 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         var vehicleReference = string.IsNullOrWhiteSpace(session.PlateNo)
             ? "NO PLATE / TEMP VEHICLE"
             : session.PlateNo.Trim().ToUpperInvariant();
+        var slotUsage = await GetStickerSlotUsageAsync(session, cancellationToken);
 
         var pngBytes = BarcodeLabelImageGenerator.GenerateLabelPng(
-            projectName: ReadString(settings, "BarcodeLabelTitle", "NETWORLD PARKING LOT"),
+            projectName: ReadString(settings, "BarcodeLabelTitle", "NETWORLD SMART PARKING"),
             companyName: session.Company.CompanyName,
             companyCode: session.Company.CompanyCode,
             companyContact: session.Company.ContactPerson,
@@ -74,7 +84,8 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
             driverName: session.DriverName,
             driverMobile: session.DriverMobile,
             barcodeNo: session.BarcodeNo,
-            entryTime: DateText(session.EntryTime, includeTime: true),
+            stickerCreatedTime: DateText(session.CreatedDate, includeTime: true),
+            entryNumberText: EntryNumberText(slotUsage),
             validUntil: validUntil,
             subscriptionText: SubscriptionText(session),
             note: ReadString(settings, "BarcodeLabelNote", "One parking session only"),
@@ -134,7 +145,7 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
             .AsNoTracking()
             .ToDictionaryAsync(x => x.SettingKey, x => x.SettingValue, cancellationToken);
 
-        var selectedLanguage = NormalizePrinterLanguage(language ?? ReadString(settings, "BarcodePrinterLanguage", "TSPL"));
+        var selectedLanguage = NormalizePrinterLanguage(language ?? ReadString(settings, "BarcodePrinterLanguage", DefaultBarcodePrinterLanguage));
 
         var selectedPrinter = string.IsNullOrWhiteSpace(printerName)
             ? ReadString(settings, "BarcodePrinterName", string.Empty)
@@ -142,10 +153,11 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
 
         var selectedCopies = Math.Clamp(copies ?? ReadInt(settings, "BarcodePrintCopies", 1), 1, 5);
         var selectedDirection = Math.Clamp(direction ?? ReadInt(settings, "BarcodePrinterDirection", 1), 0, 1);
+        var slotUsage = await GetStickerSlotUsageAsync(session, cancellationToken);
 
         var command = selectedLanguage == "ZPL"
-            ? BuildZplBarcodeLabel(session, selectedCopies, settings)
-            : BuildTsplBarcodeLabel(session, selectedCopies, settings, selectedDirection);
+            ? BuildZplBarcodeLabel(session, selectedCopies, settings, slotUsage)
+            : BuildTsplBarcodeLabel(session, selectedCopies, settings, selectedDirection, slotUsage);
 
         var dto = new BarcodeCommandPrintDto
         {
@@ -169,7 +181,7 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         var dto = new PrinterListDto
         {
             DefaultPrinterName = ReadString(settings, "BarcodePrinterName", string.Empty),
-            PrinterLanguage = ReadString(settings, "BarcodePrinterLanguage", "TSPL")
+            PrinterLanguage = ReadString(settings, "BarcodePrinterLanguage", DefaultBarcodePrinterLanguage)
         };
 
         return Ok(ApiResponse<PrinterListDto>.Ok(dto, "Printer defaults loaded."));
@@ -198,14 +210,15 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
                 .ToDictionaryAsync(x => x.SettingKey, x => x.SettingValue, cancellationToken);
 
             var copies = Math.Clamp(request.Copies > 0 ? request.Copies : ReadInt(settings, "BarcodePrintCopies", 1), 1, 5);
-            var language = NormalizePrinterLanguage(request.PrinterLanguage ?? ReadString(settings, "BarcodePrinterLanguage", "TSPL"));
+            var language = NormalizePrinterLanguage(request.PrinterLanguage ?? ReadString(settings, "BarcodePrinterLanguage", DefaultBarcodePrinterLanguage));
             var selectedPrinter = string.IsNullOrWhiteSpace(request.PrinterName)
                 ? ReadString(settings, "BarcodePrinterName", string.Empty)
                 : request.PrinterName.Trim();
             var direction = Math.Clamp(ReadInt(settings, "BarcodePrinterDirection", 1), 0, 1);
+            var slotUsage = await GetStickerSlotUsageAsync(session, cancellationToken);
             var command = language == "ZPL"
-                ? BuildZplBarcodeLabel(session, copies, settings)
-                : BuildTsplBarcodeLabel(session, copies, settings, direction);
+                ? BuildZplBarcodeLabel(session, copies, settings, slotUsage)
+                : BuildTsplBarcodeLabel(session, copies, settings, direction, slotUsage);
 
             await printer.SendRawCommandAsync(selectedPrinter, $"Barcode-{session.BarcodeNo}", command, cancellationToken);
 
@@ -320,6 +333,36 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
     private static string DateText(DateTime? value, bool includeTime = false) =>
         value.HasValue ? value.Value.ToString(includeTime ? "dd-MMM-yyyy HH:mm" : "dd-MMM-yyyy") : "-";
 
+    private sealed record StickerSlotUsage(int EntryNumber, int TotalSlots);
+
+    private async Task<StickerSlotUsage> GetStickerSlotUsageAsync(Domain.Entities.ParkingSession session, CancellationToken cancellationToken)
+    {
+        var today = DateTime.Today;
+        var activeSlots = await db.ParkingSubscriptions
+            .AsNoTracking()
+            .Where(x =>
+                x.CompanyId == session.CompanyId &&
+                x.Status == ParkingConstants.SubscriptionStatus.Active &&
+                x.StartDate.Date <= today &&
+                x.EndDate.Date >= today)
+            .SumAsync(x => (int?)x.SlotsPurchased, cancellationToken) ?? 0;
+
+        var insideCount = await db.ParkingSessions
+            .AsNoTracking()
+            .CountAsync(x => x.CompanyId == session.CompanyId && x.Status == ParkingConstants.SessionStatus.Inside, cancellationToken);
+
+        var entryNumber = session.Status == ParkingConstants.SessionStatus.Inside
+            ? insideCount
+            : insideCount + 1;
+
+        return new StickerSlotUsage(Math.Max(entryNumber, 1), Math.Max(activeSlots, 0));
+    }
+
+    private static string EntryNumberText(StickerSlotUsage slotUsage) =>
+        slotUsage.TotalSlots > 0
+            ? $"{slotUsage.EntryNumber} / {slotUsage.TotalSlots}"
+            : slotUsage.EntryNumber.ToString();
+
     private static string SubscriptionText(Domain.Entities.ParkingSession session)
     {
         var subscription = session.Subscription;
@@ -413,35 +456,35 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
 
     private sealed record PrinterBitmap(int WidthDots, int HeightDots, int BytesPerRow, string HexData);
 
-    private static string BuildTsplBarcodeLabel(Domain.Entities.ParkingSession session, int copies, Dictionary<string, string> settings, int direction)
+    private static string BuildTsplBarcodeLabel(Domain.Entities.ParkingSession session, int copies, Dictionary<string, string> settings, int direction, StickerSlotUsage slotUsage)
     {
-        var company = Clean(session.Company.CompanyName, 30);
+        var company = Clean($"Company : {session.Company.CompanyName}", 48);
         var vehicleRef = string.IsNullOrWhiteSpace(session.PlateNo)
             ? "NO PLATE / TEMP VEHICLE"
             : Clean(session.PlateNo, 26);
 
         var barcode = Clean(session.BarcodeNo, 28);
         var validUntil = session.Subscription?.EndDate.ToString("dd-MMM-yyyy") ?? "-";
-        var title = Clean(ReadString(settings, "BarcodeLabelTitle", "NETWORLD PARKING LOT"), 34);
+        var title = Clean(ReadString(settings, "BarcodeLabelTitle", "NETWORLD SMART PARKING"), 34);
         var note = Clean(ReadString(settings, "BarcodeLabelNote", "One parking session only"), 38);
         var symbology = NormalizeBarcodeSymbology(ReadString(settings, "BarcodeSymbology", "128"));
         var humanReadable = ReadBool(settings, "BarcodeShowHumanReadable", true) ? 1 : 0;
-        var widthMm = ClampInt(ReadInt(settings, "BarcodeLabelWidthMm", 60), 25, 160);
-        var heightMm = ClampInt(ReadInt(settings, "BarcodeLabelHeightMm", 35), 15, 160);
+        var widthMm = ClampInt(ReadInt(settings, "BarcodeLabelWidthMm", DefaultBarcodeLabelWidthMm), 25, 160);
+        var heightMm = ClampInt(ReadInt(settings, "BarcodeLabelHeightMm", DefaultBarcodeLabelHeightMm), 15, 160);
         var dpi = ClampInt(ReadInt(settings, "BarcodePrinterDpi", 203), 150, 600);
-        var symbolWidthMm = ClampInt(ReadInt(settings, "BarcodeSymbolWidthMm", 48), 10, 150);
-        var symbolHeightMm = ClampInt(ReadInt(settings, "BarcodeSymbolHeightMm", 12), 5, 110);
-        var marginLeft = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginLeftMm", 5), 0, 30), dpi);
-        var marginRight = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginRightMm", 5), 0, 30), dpi);
-        var marginTop = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginTopMm", 2), 0, 30), dpi);
-        var marginBottom = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginBottomMm", 2), 0, 30), dpi);
+        var symbolWidthMm = ClampInt(ReadInt(settings, "BarcodeSymbolWidthMm", DefaultBarcodeSymbolWidthMm), 10, 150);
+        var symbolHeightMm = ClampInt(ReadInt(settings, "BarcodeSymbolHeightMm", DefaultBarcodeSymbolHeightMm), 5, 110);
+        var marginLeft = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginLeftMm", DefaultBarcodeMarginMm), 0, 30), dpi);
+        var marginRight = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginRightMm", DefaultBarcodeMarginMm), 0, 30), dpi);
+        var marginTop = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginTopMm", DefaultBarcodeMarginMm), 0, 30), dpi);
+        var marginBottom = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginBottomMm", DefaultBarcodeMarginMm), 0, 30), dpi);
         var labelWidthDots = MmToDots(widthMm, dpi);
         var labelHeightDots = MmToDots(heightMm, dpi);
         var density = ClampInt(ReadInt(settings, "BarcodePrintDensity", 8), 1, 15);
         var safeDirection = Math.Clamp(direction, 0, 1);
         var safeCopies = Math.Clamp(copies, 1, 5);
         var largeLabel = heightMm >= 90 || widthMm >= 90;
-        var textScale = ClampInt(ReadInt(settings, "BarcodeTextScalePercent", 100), 60, 250);
+        var textScale = ClampInt(ReadInt(settings, "BarcodeTextScalePercent", DefaultBarcodeTextScalePercent), 60, 250);
         var symbolScale = ClampInt(ReadInt(settings, "BarcodeSymbolScalePercent", 100), 60, 250);
         var contentX = marginLeft;
         var lineHeight = largeLabel ? MmToDots(7.2, dpi) : 24;
@@ -450,8 +493,8 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         var codeY = largeLabel ? companyY + lineHeight : companyY;
         var subscriptionY = largeLabel ? codeY + lineHeight : codeY;
         var entryY = largeLabel ? subscriptionY + lineHeight : subscriptionY;
-        var validY = largeLabel ? entryY + lineHeight : entryY;
-        var vehicleY = largeLabel ? validY + lineHeight : companyY + lineHeight;
+        var stickerCreatedY = largeLabel ? entryY + lineHeight : entryY;
+        var vehicleY = largeLabel ? stickerCreatedY + lineHeight : companyY + lineHeight;
         var driverY = largeLabel ? vehicleY + lineHeight : vehicleY;
         var barcodeY = largeLabel ? driverY + lineHeight + MmToDots(4, dpi) : vehicleY + 32;
         var maxSymbolWidth = Math.Max(80, labelWidthDots - marginLeft - marginRight);
@@ -486,8 +529,8 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
             sb.AppendLine($"TEXT {contentX},{companyY},\"2\",0,{bodyMul},{bodyMul},\"{company}\"");
             sb.AppendLine($"TEXT {contentX},{codeY},\"1\",0,{smallMul},{smallMul},\"Code: {Clean(session.Company.CompanyCode, 18)}  Mobile: {Clean(session.Company.Mobile, 18)}\"");
             sb.AppendLine($"TEXT {contentX},{subscriptionY},\"1\",0,{smallMul},{smallMul},\"Subscription: {Clean(SubscriptionText(session), 48)}\"");
-            sb.AppendLine($"TEXT {contentX},{entryY},\"1\",0,{smallMul},{smallMul},\"Entry: {DateText(session.EntryTime, includeTime: true)}\"");
-            sb.AppendLine($"TEXT {contentX},{validY},\"1\",0,{smallMul},{smallMul},\"Valid Until: {validUntil}\"");
+            sb.AppendLine($"TEXT {contentX},{entryY},\"1\",0,{smallMul},{smallMul},\"Entry Number: {EntryNumberText(slotUsage)}   Valid Until: {validUntil}\"");
+            sb.AppendLine($"TEXT {contentX},{stickerCreatedY},\"1\",0,{smallMul},{smallMul},\"Sticker Created: {DateText(session.CreatedDate, includeTime: true)}\"");
             sb.AppendLine($"TEXT {contentX},{vehicleY},\"2\",0,{bodyMul},{bodyMul},\"Vehicle: {Clean(session.VehicleType, 14)}  {vehicleRef}\"");
             sb.AppendLine($"TEXT {contentX},{driverY},\"1\",0,{smallMul},{smallMul},\"Driver: {Clean(session.DriverName, 22)}  {Clean(session.DriverMobile, 18)}\"");
         }
@@ -499,40 +542,48 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         sb.AppendLine($"BITMAP {contentX},{barcodeY},{barcodeImage.BytesPerRow},{barcodeImage.HeightDots},0,{barcodeImage.HexData}");
         if (humanReadable == 1)
             sb.AppendLine($"TEXT {barcodeTextX},{barcodeY + barcodeImage.HeightDots + 4},\"1\",0,1,1,\"{barcode}\"");
-        sb.AppendLine($"TEXT {contentX},{footerY},\"1\",0,{smallMul},{smallMul},\"{(largeLabel ? $"Barcode Status: {Clean(session.BarcodeStatus, 18)}  Session: {session.SessionId}" : $"Valid Until: {validUntil}")}\"");
-        sb.AppendLine($"TEXT {contentX},{noteY},\"1\",0,{smallMul},{smallMul},\"{note}\"");
+        if (largeLabel)
+        {
+            sb.AppendLine($"TEXT {contentX},{footerY},\"1\",0,{smallMul},{smallMul},\"Barcode Status: {Clean(session.BarcodeStatus, 18)}  Session: {session.SessionId}\"");
+            sb.AppendLine($"TEXT {contentX},{noteY},\"1\",0,{smallMul},{smallMul},\"{note}\"");
+        }
+        else
+        {
+            sb.AppendLine($"TEXT {contentX},{footerY},\"1\",0,{smallMul},{smallMul},\"Valid Until: {validUntil}\"");
+            sb.AppendLine($"TEXT {contentX},{noteY},\"1\",0,{smallMul},{smallMul},\"{note}\"");
+        }
         sb.AppendLine($"PRINT {safeCopies},1");
         return sb.ToString();
     }
 
 
-    private static string BuildZplBarcodeLabel(Domain.Entities.ParkingSession session, int copies, Dictionary<string, string> settings)
+    private static string BuildZplBarcodeLabel(Domain.Entities.ParkingSession session, int copies, Dictionary<string, string> settings, StickerSlotUsage slotUsage)
     {
-        var company = Clean(session.Company.CompanyName, 30);
+        var company = Clean($"Company : {session.Company.CompanyName}", 48);
         var vehicleRef = string.IsNullOrWhiteSpace(session.PlateNo)
             ? "NO PLATE / TEMP VEHICLE"
             : Clean(session.PlateNo, 26);
 
         var barcode = Clean(session.BarcodeNo, 28);
         var validUntil = session.Subscription?.EndDate.ToString("dd-MMM-yyyy") ?? "-";
-        var title = Clean(ReadString(settings, "BarcodeLabelTitle", "NETWORLD PARKING LOT"), 34);
+        var title = Clean(ReadString(settings, "BarcodeLabelTitle", "NETWORLD SMART PARKING"), 34);
         var note = Clean(ReadString(settings, "BarcodeLabelNote", "One parking session only"), 38);
         var symbology = NormalizeBarcodeSymbology(ReadString(settings, "BarcodeSymbology", "128"));
         var humanReadable = ReadBool(settings, "BarcodeShowHumanReadable", true) ? "Y" : "N";
-        var widthMm = ClampInt(ReadInt(settings, "BarcodeLabelWidthMm", 60), 25, 160);
-        var heightMm = ClampInt(ReadInt(settings, "BarcodeLabelHeightMm", 35), 15, 160);
+        var widthMm = ClampInt(ReadInt(settings, "BarcodeLabelWidthMm", DefaultBarcodeLabelWidthMm), 25, 160);
+        var heightMm = ClampInt(ReadInt(settings, "BarcodeLabelHeightMm", DefaultBarcodeLabelHeightMm), 15, 160);
         var dpi = ClampInt(ReadInt(settings, "BarcodePrinterDpi", 203), 150, 600);
-        var symbolWidthMm = ClampInt(ReadInt(settings, "BarcodeSymbolWidthMm", 48), 10, 150);
-        var symbolHeightMm = ClampInt(ReadInt(settings, "BarcodeSymbolHeightMm", 12), 5, 110);
-        var marginLeft = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginLeftMm", 5), 0, 30), dpi);
-        var marginRight = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginRightMm", 5), 0, 30), dpi);
-        var marginTop = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginTopMm", 2), 0, 30), dpi);
-        var marginBottom = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginBottomMm", 2), 0, 30), dpi);
+        var symbolWidthMm = ClampInt(ReadInt(settings, "BarcodeSymbolWidthMm", DefaultBarcodeSymbolWidthMm), 10, 150);
+        var symbolHeightMm = ClampInt(ReadInt(settings, "BarcodeSymbolHeightMm", DefaultBarcodeSymbolHeightMm), 5, 110);
+        var marginLeft = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginLeftMm", DefaultBarcodeMarginMm), 0, 30), dpi);
+        var marginRight = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginRightMm", DefaultBarcodeMarginMm), 0, 30), dpi);
+        var marginTop = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginTopMm", DefaultBarcodeMarginMm), 0, 30), dpi);
+        var marginBottom = MmToDots(ClampInt(ReadInt(settings, "BarcodeMarginBottomMm", DefaultBarcodeMarginMm), 0, 30), dpi);
         var dotsPerMm = dpi / 25.4m;
         var printWidth = Math.Max(280, (int)Math.Round(widthMm * dotsPerMm));
         var labelLength = Math.Max(180, (int)Math.Round(heightMm * dotsPerMm));
         var largeLabel = heightMm >= 90 || widthMm >= 90;
-        var textScale = ClampInt(ReadInt(settings, "BarcodeTextScalePercent", 100), 60, 250);
+        var textScale = ClampInt(ReadInt(settings, "BarcodeTextScalePercent", DefaultBarcodeTextScalePercent), 60, 250);
         var symbolScale = ClampInt(ReadInt(settings, "BarcodeSymbolScalePercent", 100), 60, 250);
         var titleFont = largeLabel ? ScaleDots(MmToDots(4.8, dpi), textScale) : 22;
         var companyFont = largeLabel ? ScaleDots(MmToDots(5.4, dpi), textScale) : 17;
@@ -545,8 +596,8 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         var codeY = largeLabel ? companyY + lineHeight : companyY;
         var subscriptionY = largeLabel ? codeY + lineHeight : codeY;
         var entryY = largeLabel ? subscriptionY + lineHeight : subscriptionY;
-        var validY = largeLabel ? entryY + lineHeight : entryY;
-        var vehicleY = largeLabel ? validY + lineHeight : companyY + 24;
+        var stickerCreatedY = largeLabel ? entryY + lineHeight : entryY;
+        var vehicleY = largeLabel ? stickerCreatedY + lineHeight : companyY + 24;
         var driverY = largeLabel ? vehicleY + lineHeight : vehicleY;
         var barcodeY = largeLabel ? driverY + lineHeight + MmToDots(4, dpi) : vehicleY + 34;
         var maxSymbolWidth = Math.Max(80, printWidth - marginLeft - marginRight);
@@ -578,8 +629,8 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
             sb.AppendLine($"^FO{marginLeft},{companyY}^A0N,{companyFont},{companyFont}^FD{company}^FS");
             sb.AppendLine($"^FO{marginLeft},{codeY}^A0N,{bodyFont},{bodyFont}^FDCode: {Clean(session.Company.CompanyCode, 18)}  Mobile: {Clean(session.Company.Mobile, 18)}^FS");
             sb.AppendLine($"^FO{marginLeft},{subscriptionY}^A0N,{bodyFont},{bodyFont}^FDSubscription: {Clean(SubscriptionText(session), 48)}^FS");
-            sb.AppendLine($"^FO{marginLeft},{entryY}^A0N,{bodyFont},{bodyFont}^FDEntry: {DateText(session.EntryTime, includeTime: true)}^FS");
-            sb.AppendLine($"^FO{marginLeft},{validY}^A0N,{bodyFont},{bodyFont}^FDValid Until: {validUntil}^FS");
+            sb.AppendLine($"^FO{marginLeft},{entryY}^A0N,{bodyFont},{bodyFont}^FDEntry Number: {EntryNumberText(slotUsage)}   Valid Until: {validUntil}^FS");
+            sb.AppendLine($"^FO{marginLeft},{stickerCreatedY}^A0N,{bodyFont},{bodyFont}^FDSticker Created: {DateText(session.CreatedDate, includeTime: true)}^FS");
             sb.AppendLine($"^FO{marginLeft},{vehicleY}^A0N,{vehicleFont},{vehicleFont}^FDVehicle: {Clean(session.VehicleType, 14)}  {vehicleRef}^FS");
             sb.AppendLine($"^FO{marginLeft},{driverY}^A0N,{bodyFont},{bodyFont}^FDDriver: {Clean(session.DriverName, 22)}  {Clean(session.DriverMobile, 18)}^FS");
         }
@@ -591,8 +642,16 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         sb.AppendLine($"^FO{marginLeft},{barcodeY}^GFA,{totalBytes},{totalBytes},{barcodeImage.BytesPerRow},{barcodeImage.HexData}^FS");
         if (humanReadable == "Y")
             sb.AppendLine($"^FO{marginLeft},{barcodeY + barcodeImage.HeightDots + 4}^FB{barcodeImage.WidthDots},1,0,C^A0N,{barcodeNumberFont},{barcodeNumberFont}^FD{barcode}^FS");
-        sb.AppendLine($"^FO{marginLeft},{footerY}^A0N,{footerFont},{footerFont}^FD{(largeLabel ? $"Barcode Status: {Clean(session.BarcodeStatus, 18)}  Session: {session.SessionId}" : $"Valid Until: {validUntil}")}^FS");
-        sb.AppendLine($"^FO{marginLeft},{noteY}^A0N,{footerFont},{footerFont}^FD{note}^FS");
+        if (largeLabel)
+        {
+            sb.AppendLine($"^FO{marginLeft},{footerY}^A0N,{footerFont},{footerFont}^FDBarcode Status: {Clean(session.BarcodeStatus, 18)}  Session: {session.SessionId}^FS");
+            sb.AppendLine($"^FO{marginLeft},{noteY}^A0N,{footerFont},{footerFont}^FD{note}^FS");
+        }
+        else
+        {
+            sb.AppendLine($"^FO{marginLeft},{footerY}^A0N,{footerFont},{footerFont}^FDValid Until: {validUntil}^FS");
+            sb.AppendLine($"^FO{marginLeft},{noteY}^A0N,{footerFont},{footerFont}^FD{note}^FS");
+        }
         sb.AppendLine($"^PQ{safeCopies}");
         sb.AppendLine("^XZ");
         return sb.ToString();

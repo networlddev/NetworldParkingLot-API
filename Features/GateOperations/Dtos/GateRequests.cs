@@ -36,6 +36,29 @@ public sealed class GenerateBarcodeRequest
     public int OperatorId { get; set; }
 }
 
+public sealed class UpdateGeneratedBarcodeDetailsRequest
+{
+    [Range(1, int.MaxValue)]
+    public int SessionId { get; set; }
+
+    [MaxLength(30)]
+    public string? PlateNo { get; set; }
+
+    [MaxLength(30)]
+    public string VehicleType { get; set; } = "Car";
+
+    [MaxLength(100)]
+    public string? DriverName { get; set; }
+
+    [MaxLength(30)]
+    public string? DriverMobile { get; set; }
+
+    [MaxLength(500)]
+    public string? Remarks { get; set; }
+
+    public int OperatorId { get; set; }
+}
+
 public sealed class AllowEntryRequest
 {
     [Range(1, int.MaxValue)]

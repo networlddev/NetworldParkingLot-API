@@ -139,18 +139,18 @@ public sealed class SettingsService(NetworldParkingDbContext db, ISystemActivity
             BarcodeSymbology = ReadString(settings, "BarcodeSymbology", "128"),
             BarcodePrinterName = ReadString(settings, "BarcodePrinterName", string.Empty),
             BarcodePrinterType = ReadString(settings, "BarcodePrinterType", "ThermalLabel"),
-            BarcodePrinterLanguage = ReadString(settings, "BarcodePrinterLanguage", "TSPL"),
+            BarcodePrinterLanguage = ReadString(settings, "BarcodePrinterLanguage", "ZPL"),
             BarcodePrintMode = ReadString(settings, "BarcodePrintMode", "Command"),
-            BarcodeLabelWidthMm = ReadInt(settings, "BarcodeLabelWidthMm", 60),
-            BarcodeLabelHeightMm = ReadInt(settings, "BarcodeLabelHeightMm", 35),
+            BarcodeLabelWidthMm = ReadInt(settings, "BarcodeLabelWidthMm", 100),
+            BarcodeLabelHeightMm = ReadInt(settings, "BarcodeLabelHeightMm", 110),
             BarcodeBarWidth = ReadInt(settings, "BarcodeBarWidth", 2),
             BarcodeBarHeight = ReadInt(settings, "BarcodeBarHeight", 78),
-            BarcodeSymbolWidthMm = ReadInt(settings, "BarcodeSymbolWidthMm", 48),
-            BarcodeSymbolHeightMm = ReadInt(settings, "BarcodeSymbolHeightMm", 12),
+            BarcodeSymbolWidthMm = ReadInt(settings, "BarcodeSymbolWidthMm", 90),
+            BarcodeSymbolHeightMm = ReadInt(settings, "BarcodeSymbolHeightMm", 35),
             BarcodeMarginLeftMm = ReadInt(settings, "BarcodeMarginLeftMm", 5),
-            BarcodeMarginTopMm = ReadInt(settings, "BarcodeMarginTopMm", 2),
+            BarcodeMarginTopMm = ReadInt(settings, "BarcodeMarginTopMm", 5),
             BarcodeMarginRightMm = ReadInt(settings, "BarcodeMarginRightMm", 5),
-            BarcodeMarginBottomMm = ReadInt(settings, "BarcodeMarginBottomMm", 2),
+            BarcodeMarginBottomMm = ReadInt(settings, "BarcodeMarginBottomMm", 5),
             BarcodePrinterDpi = ReadInt(settings, "BarcodePrinterDpi", 203),
             BarcodePrinterDirection = ReadInt(settings, "BarcodePrinterDirection", 1),
             BarcodePrintDensity = ReadInt(settings, "BarcodePrintDensity", 8),
@@ -161,7 +161,7 @@ public sealed class SettingsService(NetworldParkingDbContext db, ISystemActivity
             AutoPrintBarcodeAfterEntry = ReadBool(settings, "AutoPrintBarcodeAfterEntry", true),
             AllowBarcodeReprint = ReadBool(settings, "AllowBarcodeReprint", true),
             BarcodeShowHumanReadable = ReadBool(settings, "BarcodeShowHumanReadable", true),
-            BarcodeLabelTitle = ReadString(settings, "BarcodeLabelTitle", "NETWORLD PARKING LOT"),
+            BarcodeLabelTitle = ReadString(settings, "BarcodeLabelTitle", "NETWORLD SMART PARKING"),
             BarcodeLabelNote = ReadString(settings, "BarcodeLabelNote", "One parking session only")
         },
         Invoice = new InvoiceSettingsDto
@@ -331,7 +331,7 @@ public sealed class SettingsService(NetworldParkingDbContext db, ISystemActivity
             ["AutoPrintBarcodeAfterEntry"] = Value(b.AutoPrintBarcodeAfterEntry, "Automatically print barcode after generation in supported screens"),
             ["AllowBarcodeReprint"] = Value(b.AllowBarcodeReprint, "Allow reprinting barcode labels"),
             ["BarcodeShowHumanReadable"] = Value(b.BarcodeShowHumanReadable, "Show barcode number below barcode"),
-            ["BarcodeLabelTitle"] = Value(CleanText(b.BarcodeLabelTitle, 80, "NETWORLD PARKING LOT"), "Barcode label title"),
+            ["BarcodeLabelTitle"] = Value(CleanText(b.BarcodeLabelTitle, 80, "NETWORLD SMART PARKING"), "Barcode label title"),
             ["BarcodeLabelNote"] = Value(CleanText(b.BarcodeLabelNote, 120, "One parking session only"), "Barcode label footer note"),
 
             ["InvoicePrefix"] = Value(CleanPrefix(i.InvoicePrefix, "INV"), "Invoice number prefix"),
@@ -416,7 +416,7 @@ public sealed class SettingsService(NetworldParkingDbContext db, ISystemActivity
 
     private static string NormalizePrinterLanguage(string? value)
     {
-        var clean = CleanText(value, 20, "TSPL").ToUpperInvariant();
+        var clean = CleanText(value, 20, "ZPL").ToUpperInvariant();
         return clean == "ZPL" ? "ZPL" : "TSPL";
     }
 

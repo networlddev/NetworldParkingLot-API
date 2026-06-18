@@ -159,6 +159,16 @@ public sealed class UserAccessService(
             ?? throw new InvalidOperationException("User not found.");
         if (string.IsNullOrWhiteSpace(request.FullName)) throw new InvalidOperationException("Full name is required.");
 
+        if (IsBreakGlassAccount(user))
+        {
+            if (!string.IsNullOrWhiteSpace(request.Password) && operatorId != user.UserId)
+                throw new InvalidOperationException("Only the Super Admin break-glass account can change its own password.");
+            if (!string.Equals(NormalizeStatus(request.Status), "Active", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The Super Admin break-glass account must remain active.");
+            if (!string.IsNullOrWhiteSpace(request.RoleKey) && !IsBreakGlassRoleKey(request.RoleKey))
+                throw new InvalidOperationException("The Super Admin break-glass account role cannot be changed.");
+        }
+
         user.FullName = request.FullName.Trim();
         user.Email = Clean(request.Email);
         user.Phone = Clean(request.Phone);
@@ -187,6 +197,8 @@ public sealed class UserAccessService(
     {
         var user = await db.AppUsers.FirstOrDefaultAsync(x => x.UserId == userId, cancellationToken)
             ?? throw new InvalidOperationException("User not found.");
+        if (IsBreakGlassAccount(user))
+            throw new InvalidOperationException("The Super Admin break-glass account status cannot be changed.");
         user.Status = NormalizeStatus(status);
         user.ModifiedBy = operatorId;
         user.ModifiedDate = DateTime.Now;
@@ -195,8 +207,15 @@ public sealed class UserAccessService(
 
     public async Task DeleteUserAsync(int userId, int operatorId, CancellationToken cancellationToken = default)
     {
+        if (userId == operatorId)
+            throw new InvalidOperationException("You cannot delete your own account.");
+
         var user = await db.AppUsers.FirstOrDefaultAsync(x => x.UserId == userId, cancellationToken)
             ?? throw new InvalidOperationException("User not found.");
+
+        if (await IsProtectedAdminUserAsync(user, cancellationToken))
+            throw new InvalidOperationException("System Admin and Super Admin accounts cannot be deleted.");
+
         user.Active = false;
         user.Status = "Deleted";
         user.ModifiedBy = operatorId;
@@ -230,6 +249,8 @@ public sealed class UserAccessService(
     {
         var role = await db.AppRoles.FirstOrDefaultAsync(x => x.RoleId == roleId, cancellationToken)
             ?? throw new InvalidOperationException("Role not found.");
+        if (IsBreakGlassRoleKey(role.RoleKey))
+            throw new InvalidOperationException("The Super Admin role cannot be changed.");
         if (string.IsNullOrWhiteSpace(request.RoleName)) throw new InvalidOperationException("Role name is required.");
         if (request.IsDefault) await ClearDefaultRolesAsync(cancellationToken);
         role.RoleName = request.RoleName.Trim();
@@ -249,7 +270,10 @@ public sealed class UserAccessService(
 
     public async Task SaveRolePermissionsAsync(int roleId, SaveRolePermissionsDto request, CancellationToken cancellationToken = default)
     {
-        if (!await db.AppRoles.AnyAsync(x => x.RoleId == roleId, cancellationToken)) throw new InvalidOperationException("Role not found.");
+        var role = await db.AppRoles.AsNoTracking().FirstOrDefaultAsync(x => x.RoleId == roleId, cancellationToken)
+            ?? throw new InvalidOperationException("Role not found.");
+        if (IsBreakGlassRoleKey(role.RoleKey))
+            throw new InvalidOperationException("The Super Admin role permissions cannot be changed.");
         db.AppRolePermissions.RemoveRange(db.AppRolePermissions.Where(x => x.RoleId == roleId));
         foreach (var p in request.Permissions.Where(x => x.IsAllowed))
         {
@@ -281,7 +305,10 @@ public sealed class UserAccessService(
 
     public async Task SaveUserRolesAsync(int userId, SaveUserRolesDto request, CancellationToken cancellationToken = default)
     {
-        if (!await db.AppUsers.AnyAsync(x => x.UserId == userId, cancellationToken)) throw new InvalidOperationException("User not found.");
+        var user = await db.AppUsers.AsNoTracking().FirstOrDefaultAsync(x => x.UserId == userId, cancellationToken)
+            ?? throw new InvalidOperationException("User not found.");
+        if (IsBreakGlassAccount(user))
+            throw new InvalidOperationException("The Super Admin break-glass account roles cannot be changed.");
         db.AppUserRoles.RemoveRange(db.AppUserRoles.Where(x => x.UserId == userId));
         foreach (var roleId in request.RoleIds.Distinct())
         {
@@ -301,7 +328,10 @@ public sealed class UserAccessService(
 
     public async Task SaveUserPermissionsAsync(int userId, SaveUserPermissionsDto request, CancellationToken cancellationToken = default)
     {
-        if (!await db.AppUsers.AnyAsync(x => x.UserId == userId, cancellationToken)) throw new InvalidOperationException("User not found.");
+        var user = await db.AppUsers.AsNoTracking().FirstOrDefaultAsync(x => x.UserId == userId, cancellationToken)
+            ?? throw new InvalidOperationException("User not found.");
+        if (IsBreakGlassAccount(user))
+            throw new InvalidOperationException("The Super Admin break-glass account permission overrides cannot be changed.");
         db.AppUserPermissions.RemoveRange(db.AppUserPermissions.Where(x => x.UserId == userId));
         foreach (var p in request.Permissions.Where(x => x.IsAllowed))
         {
@@ -360,7 +390,10 @@ public sealed class UserAccessService(
 
     public async Task SaveUserPermissionOverridesAsync(int userId, SaveUserPermissionOverridesDto request, CancellationToken cancellationToken = default)
     {
-        if (!await db.AppUsers.AnyAsync(x => x.UserId == userId, cancellationToken)) throw new InvalidOperationException("User not found.");
+        var user = await db.AppUsers.AsNoTracking().FirstOrDefaultAsync(x => x.UserId == userId, cancellationToken)
+            ?? throw new InvalidOperationException("User not found.");
+        if (IsBreakGlassAccount(user))
+            throw new InvalidOperationException("The Super Admin break-glass account permission overrides cannot be changed.");
         db.AppUserPermissions.RemoveRange(db.AppUserPermissions.Where(x => x.UserId == userId));
 
         foreach (var p in request.Permissions)
@@ -429,6 +462,39 @@ public sealed class UserAccessService(
             if (!string.IsNullOrWhiteSpace(legacyRole)) roles.Add(ToRoleKey(legacyRole));
         }
         return roles.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private async Task<bool> IsProtectedAdminUserAsync(AppUser user, CancellationToken cancellationToken)
+    {
+        var roleKeys = await GetUserRoleKeysAsync(user.UserId, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(user.Role))
+            roleKeys.Add(ToRoleKey(user.Role));
+
+        if (roleKeys.Any(IsProtectedAdminRoleKey))
+            return true;
+
+        var normalizedFullName = ToRoleKey(user.FullName);
+        return normalizedFullName is "system_admin" or "super_admin" or "superadmin";
+    }
+
+    private static bool IsProtectedAdminRoleKey(string roleKey)
+    {
+        var normalized = ToRoleKey(roleKey);
+        return normalized is "super_admin" or "superadmin" or "system_admin" or "admin";
+    }
+
+    private static bool IsBreakGlassAccount(AppUser user)
+    {
+        var username = ToRoleKey(user.Username);
+        var fullName = ToRoleKey(user.FullName);
+        return username is "superadmin" or "super_admin" ||
+               fullName is "super_admin" or "superadmin";
+    }
+
+    private static bool IsBreakGlassRoleKey(string roleKey)
+    {
+        var normalized = ToRoleKey(roleKey);
+        return normalized is "super_admin" or "superadmin";
     }
 
     private async Task<SystemUserListItemDto> BuildUserDtoAsync(AppUser user, CancellationToken cancellationToken)

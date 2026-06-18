@@ -41,6 +41,7 @@ public sealed class AccessControlController(IUserAccessService userAccessService
 
     [RequireParkingPermission("access_control", "edit")]
     [HttpPut("roles/{roleId:int}")]
+    [HttpPost("roles/{roleId:int}")]
     public async Task<ActionResult<ApiResponse<AccessRoleDto>>> UpdateRole(int roleId, [FromBody] UpdateAccessRoleDto request, CancellationToken cancellationToken)
     {
         try
@@ -66,6 +67,7 @@ public sealed class AccessControlController(IUserAccessService userAccessService
 
     [RequireParkingPermission("access_control", "edit")]
     [HttpPut("roles/{roleId:int}/permissions")]
+    [HttpPost("roles/{roleId:int}/permissions")]
     public async Task<ActionResult<ApiResponse<object>>> SaveRolePermissions(int roleId, [FromBody] SaveRolePermissionsDto request, CancellationToken cancellationToken)
     {
         try
@@ -103,6 +105,7 @@ public sealed class AccessControlController(IUserAccessService userAccessService
 
     [RequireParkingPermission("access_control", "edit")]
     [HttpPut("users/{userId:int}/roles")]
+    [HttpPost("users/{userId:int}/roles")]
     public async Task<ActionResult<ApiResponse<object>>> SaveUserRoles(int userId, [FromBody] SaveUserRolesDto request, CancellationToken cancellationToken)
     {
         try
@@ -128,6 +131,7 @@ public sealed class AccessControlController(IUserAccessService userAccessService
 
     [RequireParkingPermission("access_control", "edit")]
     [HttpPut("users/{userId:int}/permissions")]
+    [HttpPost("users/{userId:int}/permissions")]
     public async Task<ActionResult<ApiResponse<object>>> SaveUserPermissions(int userId, [FromBody] SaveUserPermissionsDto request, CancellationToken cancellationToken)
     {
         try
@@ -153,6 +157,7 @@ public sealed class AccessControlController(IUserAccessService userAccessService
 
     [RequireParkingPermission("access_control", "edit")]
     [HttpPut("users/{userId:int}/permission-overrides")]
+    [HttpPost("users/{userId:int}/permission-overrides")]
     public async Task<ActionResult<ApiResponse<object>>> SaveUserPermissionOverrides(int userId, [FromBody] SaveUserPermissionOverridesDto request, CancellationToken cancellationToken)
     {
         try

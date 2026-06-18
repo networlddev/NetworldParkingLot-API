@@ -1,14 +1,14 @@
 IF NOT EXISTS (SELECT 1 FROM dbo.SystemSettings WHERE SettingKey = 'BarcodeLabelWidthMm')
 BEGIN
     INSERT INTO dbo.SystemSettings (SettingKey, SettingValue, Remarks)
-    VALUES ('BarcodeLabelWidthMm', '60', 'Barcode image label width in millimeters');
+    VALUES ('BarcodeLabelWidthMm', '100', 'Barcode image label width in millimeters');
 END
 GO
 
 IF NOT EXISTS (SELECT 1 FROM dbo.SystemSettings WHERE SettingKey = 'BarcodeLabelHeightMm')
 BEGIN
     INSERT INTO dbo.SystemSettings (SettingKey, SettingValue, Remarks)
-    VALUES ('BarcodeLabelHeightMm', '35', 'Barcode image label height in millimeters');
+    VALUES ('BarcodeLabelHeightMm', '110', 'Barcode image label height in millimeters');
 END
 GO
 

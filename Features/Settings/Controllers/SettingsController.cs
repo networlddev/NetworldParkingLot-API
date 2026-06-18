@@ -25,6 +25,7 @@ public sealed class SettingsController(ISettingsService service, ISystemActivity
 
     [RequireParkingPermission("settings", "edit")]
     [HttpPut]
+    [HttpPost]
     public async Task<ActionResult<ApiResponse<ParkingSettingsDto>>> UpdateSettings([FromBody] UpdateParkingSettingsRequest request, CancellationToken cancellationToken)
     {
         try

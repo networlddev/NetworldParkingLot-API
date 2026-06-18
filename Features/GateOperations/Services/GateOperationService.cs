@@ -964,6 +964,58 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         return new GenerateBarcodeResponseDto(session.SessionId, barcodeNo, company.CompanyName, plateNo, session.VehicleType, session.CreatedDate, session.Status, session.BarcodeStatus);
     }
 
+    public async Task<GenerateBarcodeResponseDto> UpdateGeneratedBarcodeDetailsAsync(UpdateGeneratedBarcodeDetailsRequest request, CancellationToken cancellationToken = default)
+    {
+        var session = await db.ParkingSessions
+            .Include(x => x.Company)
+            .FirstOrDefaultAsync(x => x.SessionId == request.SessionId, cancellationToken)
+            ?? throw new InvalidOperationException("Parking session not found.");
+
+        if (session.Status != ParkingConstants.SessionStatus.BarcodeGenerated || session.BarcodeStatus != ParkingConstants.BarcodeStatus.Generated)
+            throw new InvalidOperationException("Only a generated barcode can be updated before entry.");
+
+        var plateNo = string.IsNullOrWhiteSpace(request.PlateNo)
+            ? null
+            : request.PlateNo.Trim().ToUpperInvariant();
+
+        if (!string.IsNullOrWhiteSpace(plateNo))
+        {
+            var alreadyInside = await db.ParkingSessions.AnyAsync(x =>
+                x.SessionId != session.SessionId &&
+                x.PlateNo == plateNo &&
+                x.Status == ParkingConstants.SessionStatus.Inside,
+                cancellationToken);
+            if (alreadyInside)
+                throw new InvalidOperationException("This vehicle reference is already inside. Please check before printing the barcode.");
+        }
+
+        var oldPlate = session.PlateNo;
+        var oldVehicleType = session.VehicleType;
+        var oldDriverName = session.DriverName;
+        var oldDriverMobile = session.DriverMobile;
+        var oldRemarks = session.Remarks;
+
+        session.PlateNo = plateNo;
+        session.VehicleType = string.IsNullOrWhiteSpace(request.VehicleType) ? "Car" : request.VehicleType.Trim();
+        session.DriverName = TrimOrNull(request.DriverName);
+        session.DriverMobile = TrimOrNull(request.DriverMobile);
+        session.Remarks = TrimOrNull(request.Remarks);
+
+        var changes = new List<SystemActivityChange>
+        {
+            new("PlateNo", oldPlate, session.PlateNo),
+            new("VehicleType", oldVehicleType, session.VehicleType),
+            new("DriverName", oldDriverName, session.DriverName),
+            new("DriverMobile", oldDriverMobile, session.DriverMobile),
+            new("Remarks", oldRemarks, session.Remarks)
+        };
+
+        await AddActivityAsync(ParkingConstants.GateActionType.BarcodeGenerated, session.CompanyId, session.SessionId, session.BarcodeNo, session.PlateNo, "Barcode Details Updated", "Generated barcode details updated before printing.", request.OperatorId, cancellationToken, changes, "ParkingSession", session.SessionId.ToString());
+        await db.SaveChangesAsync(cancellationToken);
+
+        return new GenerateBarcodeResponseDto(session.SessionId, session.BarcodeNo, session.Company.CompanyName, session.PlateNo, session.VehicleType, session.CreatedDate, session.Status, session.BarcodeStatus);
+    }
+
     public async Task<EntryResultDto> AllowEntryAsync(AllowEntryRequest request, CancellationToken cancellationToken = default)
     {
         var session = await repository.GetSessionAsync(request.SessionId, cancellationToken)

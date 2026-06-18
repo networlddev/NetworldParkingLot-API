@@ -14,7 +14,7 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM dbo.SystemSettings WHERE SettingKey = 'BarcodeMarginTopMm')
     BEGIN
         INSERT INTO dbo.SystemSettings (SettingKey, SettingValue, Remarks)
-        VALUES ('BarcodeMarginTopMm', '2', 'Barcode label top margin in millimeters');
+        VALUES ('BarcodeMarginTopMm', '5', 'Barcode label top margin in millimeters');
     END
 
     IF NOT EXISTS (SELECT 1 FROM dbo.SystemSettings WHERE SettingKey = 'BarcodeMarginRightMm')
@@ -26,6 +26,6 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM dbo.SystemSettings WHERE SettingKey = 'BarcodeMarginBottomMm')
     BEGIN
         INSERT INTO dbo.SystemSettings (SettingKey, SettingValue, Remarks)
-        VALUES ('BarcodeMarginBottomMm', '2', 'Barcode label bottom margin in millimeters');
+        VALUES ('BarcodeMarginBottomMm', '5', 'Barcode label bottom margin in millimeters');
     END
 END
