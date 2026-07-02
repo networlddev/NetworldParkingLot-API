@@ -17,6 +17,8 @@ public interface IGateOperationService
     Task<SubscriptionListItemDto> UpdateSubscriptionAsync(int subscriptionId, UpdateSubscriptionRequest request, CancellationToken cancellationToken = default);
     Task<SubscriptionListItemDto> CancelSubscriptionAsync(int subscriptionId, CancelSubscriptionRequest request, CancellationToken cancellationToken = default);
     Task<SubscriptionListItemDto> RenewSubscriptionAsync(int subscriptionId, RenewSubscriptionRequest request, CancellationToken cancellationToken = default);
+    Task<SlotReductionPreviewDto> PreviewSubscriptionSlotReductionAsync(int subscriptionId, ReduceSubscriptionSlotsRequest request, CancellationToken cancellationToken = default);
+    Task<SlotReductionResultDto> ReduceSubscriptionSlotsAsync(int subscriptionId, ReduceSubscriptionSlotsRequest request, CancellationToken cancellationToken = default);
     Task<CompanyGateStatusDto> CheckCompanyAsync(CheckCompanyRequest request, CancellationToken cancellationToken = default);
     Task<GenerateBarcodeResponseDto> GenerateBarcodeAsync(GenerateBarcodeRequest request, CancellationToken cancellationToken = default);
     Task<GenerateBarcodeResponseDto> UpdateGeneratedBarcodeDetailsAsync(UpdateGeneratedBarcodeDetailsRequest request, CancellationToken cancellationToken = default);

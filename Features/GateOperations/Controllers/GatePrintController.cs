@@ -363,12 +363,25 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
             ? $"{slotUsage.EntryNumber} / {slotUsage.TotalSlots}"
             : slotUsage.EntryNumber.ToString();
 
+    private static string SlotRatioText(StickerSlotUsage slotUsage) =>
+        slotUsage.TotalSlots > 0
+            ? $"{slotUsage.EntryNumber}/{slotUsage.TotalSlots}"
+            : slotUsage.EntryNumber.ToString();
+
     private static string SubscriptionText(Domain.Entities.ParkingSession session)
     {
         var subscription = session.Subscription;
         if (subscription == null) return "-";
 
         return $"{subscription.PlanType} | {subscription.SlotsPurchased} slot(s) | {DateText(subscription.StartDate)} to {DateText(subscription.EndDate)}";
+    }
+
+    private static string ShortSubscriptionText(Domain.Entities.ParkingSession session)
+    {
+        var subscription = session.Subscription;
+        if (subscription == null) return "-";
+
+        return $"{subscription.PlanType} | {subscription.SlotsPurchased} slot(s)";
     }
 
     private static PrinterBitmap BuildBarcodeBitmap(string barcode, string symbology, int widthDots, int heightDots)
@@ -488,6 +501,12 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         var symbolScale = ClampInt(ReadInt(settings, "BarcodeSymbolScalePercent", 100), 60, 250);
         var contentX = marginLeft;
         var lineHeight = largeLabel ? MmToDots(7.2, dpi) : 24;
+        var slotBadgeWidth = largeLabel ? Math.Min(MmToDots(33, dpi), Math.Max(120, labelWidthDots - marginLeft - marginRight)) : 0;
+        var slotBadgeHeight = largeLabel ? MmToDots(23, dpi) : 0;
+        var slotBadgeX = largeLabel ? Math.Max(contentX, labelWidthDots - marginRight - slotBadgeWidth) : contentX;
+        var slotBadgeY = marginTop;
+        var titleMaxLength = largeLabel && slotBadgeX > contentX + MmToDots(35, dpi) ? 24 : 34;
+        var leftOfBadgeWidth = largeLabel ? Math.Max(180, slotBadgeX - contentX - MmToDots(4, dpi)) : labelWidthDots - marginLeft - marginRight;
         var titleY = marginTop;
         var companyY = titleY + lineHeight;
         var codeY = largeLabel ? companyY + lineHeight : companyY;
@@ -512,9 +531,13 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         var barcodeTextX = CenteredTsplTextX(contentX, barcodeImage.WidthDots, barcode);
         var footerY = barcodeY + barcodeImage.HeightDots + (humanReadable == 1 ? 30 : 18);
         var noteY = footerY + 24;
-        var titleMul = largeLabel ? Math.Clamp((int)Math.Round(2 * textScale / 100d), 1, 4) : 1;
+        var titleMul = largeLabel ? Math.Clamp((int)Math.Round(1 * textScale / 100d), 1, 2) : 1;
         var bodyMul = largeLabel ? Math.Clamp((int)Math.Round(2 * textScale / 100d), 1, 4) : 1;
         var smallMul = largeLabel ? Math.Clamp((int)Math.Round(1 * textScale / 100d), 1, 3) : 1;
+        var slotNumberMul = largeLabel ? Math.Clamp((int)Math.Round(4 * textScale / 100d), 3, 6) : 1;
+        var slotText = SlotRatioText(slotUsage);
+        var safeLeftLineChars = largeLabel ? Math.Max(12, leftOfBadgeWidth / Math.Max(8 * bodyMul, 1)) : 48;
+        var safeLeftSmallLineChars = largeLabel ? Math.Max(16, leftOfBadgeWidth / Math.Max(8 * smallMul, 1)) : 48;
 
         var sb = new System.Text.StringBuilder();
         sb.AppendLine($"SIZE {widthMm} mm,{heightMm} mm");
@@ -523,16 +546,19 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         sb.AppendLine($"DIRECTION {safeDirection}");
         sb.AppendLine("REFERENCE 0,0");
         sb.AppendLine("CLS");
-        sb.AppendLine($"TEXT {contentX},{titleY},\"2\",0,{titleMul},{titleMul},\"{title}\"");
+        sb.AppendLine($"TEXT {contentX},{titleY},\"2\",0,{titleMul},{titleMul},\"{Clean(title, titleMaxLength)}\"");
         if (largeLabel)
         {
-            sb.AppendLine($"TEXT {contentX},{companyY},\"2\",0,{bodyMul},{bodyMul},\"{company}\"");
-            sb.AppendLine($"TEXT {contentX},{codeY},\"1\",0,{smallMul},{smallMul},\"Code: {Clean(session.Company.CompanyCode, 18)}  Mobile: {Clean(session.Company.Mobile, 18)}\"");
-            sb.AppendLine($"TEXT {contentX},{subscriptionY},\"1\",0,{smallMul},{smallMul},\"Subscription: {Clean(SubscriptionText(session), 48)}\"");
-            sb.AppendLine($"TEXT {contentX},{entryY},\"1\",0,{smallMul},{smallMul},\"Entry Number: {EntryNumberText(slotUsage)}   Valid Until: {validUntil}\"");
+            sb.AppendLine($"BOX {slotBadgeX},{slotBadgeY},{slotBadgeX + slotBadgeWidth},{slotBadgeY + slotBadgeHeight},3");
+            sb.AppendLine($"TEXT {CenteredTsplTextX(slotBadgeX, slotBadgeWidth, slotText, 24 * slotNumberMul)},{slotBadgeY + MmToDots(2, dpi)},\"3\",0,{slotNumberMul},{slotNumberMul},\"{slotText}\"");
+            sb.AppendLine($"TEXT {CenteredTsplTextX(slotBadgeX, slotBadgeWidth, "INSIDE / SLOTS", 8 * smallMul)},{slotBadgeY + slotBadgeHeight - MmToDots(6, dpi)},\"1\",0,{smallMul},{smallMul},\"INSIDE / SLOTS\"");
+            sb.AppendLine($"TEXT {contentX},{companyY},\"2\",0,{bodyMul},{bodyMul},\"{Clean(company, safeLeftLineChars)}\"");
+            sb.AppendLine($"TEXT {contentX},{codeY},\"1\",0,{smallMul},{smallMul},\"Code: {Clean(session.Company.CompanyCode, Math.Max(8, safeLeftSmallLineChars - 6))}\"");
+            sb.AppendLine($"TEXT {contentX},{subscriptionY},\"1\",0,{smallMul},{smallMul},\"Subscription: {Clean(ShortSubscriptionText(session), Math.Max(8, safeLeftSmallLineChars - 14))}\"");
+            sb.AppendLine($"TEXT {contentX},{entryY},\"1\",0,{smallMul},{smallMul},\"Valid Until: {validUntil}\"");
             sb.AppendLine($"TEXT {contentX},{stickerCreatedY},\"1\",0,{smallMul},{smallMul},\"Sticker Created: {DateText(session.CreatedDate, includeTime: true)}\"");
             sb.AppendLine($"TEXT {contentX},{vehicleY},\"2\",0,{bodyMul},{bodyMul},\"Vehicle: {Clean(session.VehicleType, 14)}  {vehicleRef}\"");
-            sb.AppendLine($"TEXT {contentX},{driverY},\"1\",0,{smallMul},{smallMul},\"Driver: {Clean(session.DriverName, 22)}  {Clean(session.DriverMobile, 18)}\"");
+            sb.AppendLine($"TEXT {contentX},{driverY},\"1\",0,{smallMul},{smallMul},\"Driver: {Clean(session.DriverName, 22)}  Mobile: {Clean(session.DriverMobile, 18)}\"");
         }
         else
         {
@@ -585,12 +611,18 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         var largeLabel = heightMm >= 90 || widthMm >= 90;
         var textScale = ClampInt(ReadInt(settings, "BarcodeTextScalePercent", DefaultBarcodeTextScalePercent), 60, 250);
         var symbolScale = ClampInt(ReadInt(settings, "BarcodeSymbolScalePercent", 100), 60, 250);
-        var titleFont = largeLabel ? ScaleDots(MmToDots(4.8, dpi), textScale) : 22;
+        var titleFont = largeLabel ? ScaleDots(MmToDots(3.8, dpi), textScale) : 22;
         var companyFont = largeLabel ? ScaleDots(MmToDots(5.4, dpi), textScale) : 17;
         var bodyFont = largeLabel ? ScaleDots(MmToDots(3.8, dpi), textScale) : 18;
         var vehicleFont = largeLabel ? ScaleDots(MmToDots(4.8, dpi), textScale) : 21;
         var footerFont = largeLabel ? ScaleDots(MmToDots(3.4, dpi), textScale) : 15;
         var lineHeight = largeLabel ? ScaleDots(MmToDots(7.2, dpi), textScale) : 26;
+        var slotBadgeWidth = largeLabel ? Math.Min(MmToDots(33, dpi), Math.Max(120, printWidth - marginLeft - marginRight)) : 0;
+        var slotBadgeHeight = largeLabel ? MmToDots(23, dpi) : 0;
+        var slotBadgeX = largeLabel ? Math.Max(marginLeft, printWidth - marginRight - slotBadgeWidth) : marginLeft;
+        var slotBadgeY = marginTop;
+        var titleTextWidth = largeLabel ? Math.Max(120, slotBadgeX - marginLeft - MmToDots(3, dpi)) : printWidth - marginLeft - marginRight;
+        var leftOfBadgeWidth = largeLabel ? Math.Max(140, slotBadgeX - marginLeft - MmToDots(4, dpi)) : printWidth - marginLeft - marginRight;
         var titleY = marginTop;
         var companyY = titleY + lineHeight;
         var codeY = largeLabel ? companyY + lineHeight : companyY;
@@ -616,6 +648,9 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         var barcodeNumberFont = largeLabel ? ScaleDots(MmToDots(4.2, dpi), textScale) : 15;
         var footerY = barcodeY + barcodeImage.HeightDots + (humanReadable == "Y" ? barcodeNumberFont + MmToDots(3, dpi) : MmToDots(3, dpi));
         var noteY = footerY + footerFont + MmToDots(2, dpi);
+        var slotNumberFont = largeLabel ? ScaleDots(MmToDots(13, dpi), textScale) : bodyFont;
+        var slotCaptionFont = largeLabel ? ScaleDots(MmToDots(3.3, dpi), textScale) : footerFont;
+        var slotText = SlotRatioText(slotUsage);
 
         var totalBytes = barcodeImage.BytesPerRow * barcodeImage.HeightDots;
         var sb = new System.Text.StringBuilder();
@@ -623,16 +658,19 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         sb.AppendLine($"^PW{printWidth}");
         sb.AppendLine($"^LL{labelLength}");
         sb.AppendLine("^LH0,0");
-        sb.AppendLine($"^FO{marginLeft},{titleY}^A0N,{titleFont},{titleFont}^FD{title}^FS");
+        sb.AppendLine($"^FO{marginLeft},{titleY}^FB{titleTextWidth},1,0,L^A0N,{titleFont},{titleFont}^FD{title}^FS");
         if (largeLabel)
         {
-            sb.AppendLine($"^FO{marginLeft},{companyY}^A0N,{companyFont},{companyFont}^FD{company}^FS");
-            sb.AppendLine($"^FO{marginLeft},{codeY}^A0N,{bodyFont},{bodyFont}^FDCode: {Clean(session.Company.CompanyCode, 18)}  Mobile: {Clean(session.Company.Mobile, 18)}^FS");
-            sb.AppendLine($"^FO{marginLeft},{subscriptionY}^A0N,{bodyFont},{bodyFont}^FDSubscription: {Clean(SubscriptionText(session), 48)}^FS");
-            sb.AppendLine($"^FO{marginLeft},{entryY}^A0N,{bodyFont},{bodyFont}^FDEntry Number: {EntryNumberText(slotUsage)}   Valid Until: {validUntil}^FS");
+            sb.AppendLine($"^FO{slotBadgeX},{slotBadgeY}^GB{slotBadgeWidth},{slotBadgeHeight},3^FS");
+            sb.AppendLine($"^FO{slotBadgeX},{slotBadgeY + MmToDots(2, dpi)}^FB{slotBadgeWidth},1,0,C^A0N,{slotNumberFont},{slotNumberFont}^FD{slotText}^FS");
+            sb.AppendLine($"^FO{slotBadgeX},{slotBadgeY + slotBadgeHeight - slotCaptionFont - MmToDots(2, dpi)}^FB{slotBadgeWidth},1,0,C^A0N,{slotCaptionFont},{slotCaptionFont}^FDINSIDE / SLOTS^FS");
+            sb.AppendLine($"^FO{marginLeft},{companyY}^FB{leftOfBadgeWidth},1,0,L^A0N,{companyFont},{companyFont}^FD{company}^FS");
+            sb.AppendLine($"^FO{marginLeft},{codeY}^FB{leftOfBadgeWidth},1,0,L^A0N,{bodyFont},{bodyFont}^FDCode: {Clean(session.Company.CompanyCode, 24)}^FS");
+            sb.AppendLine($"^FO{marginLeft},{subscriptionY}^FB{leftOfBadgeWidth},1,0,L^A0N,{bodyFont},{bodyFont}^FDSubscription: {Clean(ShortSubscriptionText(session), 26)}^FS");
+            sb.AppendLine($"^FO{marginLeft},{entryY}^A0N,{bodyFont},{bodyFont}^FDValid Until: {validUntil}^FS");
             sb.AppendLine($"^FO{marginLeft},{stickerCreatedY}^A0N,{bodyFont},{bodyFont}^FDSticker Created: {DateText(session.CreatedDate, includeTime: true)}^FS");
             sb.AppendLine($"^FO{marginLeft},{vehicleY}^A0N,{vehicleFont},{vehicleFont}^FDVehicle: {Clean(session.VehicleType, 14)}  {vehicleRef}^FS");
-            sb.AppendLine($"^FO{marginLeft},{driverY}^A0N,{bodyFont},{bodyFont}^FDDriver: {Clean(session.DriverName, 22)}  {Clean(session.DriverMobile, 18)}^FS");
+            sb.AppendLine($"^FO{marginLeft},{driverY}^A0N,{bodyFont},{bodyFont}^FDDriver: {Clean(session.DriverName, 22)}  Mobile: {Clean(session.DriverMobile, 18)}^FS");
         }
         else
         {

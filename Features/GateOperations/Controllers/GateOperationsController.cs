@@ -331,6 +331,38 @@ public sealed class GateOperationsController(IGateOperationService service, ISys
         }
     }
 
+    [RequireParkingPermission("subscriptions", "view")]
+    [HttpPost("subscriptions/{subscriptionId:int}/reduce-slots/preview")]
+    public async Task<ActionResult<ApiResponse<SlotReductionPreviewDto>>> PreviewSubscriptionSlotReduction(int subscriptionId, [FromBody] ReduceSubscriptionSlotsRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.PreviewSubscriptionSlotReductionAsync(subscriptionId, StampOperator(request), cancellationToken);
+            return Ok(ApiResponse<SlotReductionPreviewDto>.Ok(data));
+        }
+        catch (InvalidOperationException ex)
+        {
+            await RecordSubscriptionFailureAsync("reduce_slots_preview", "ParkingSubscription", subscriptionId.ToString(), "Slot reduction preview failed", ex.Message, cancellationToken);
+            return BadRequest(ApiResponse<SlotReductionPreviewDto>.Fail(ex.Message));
+        }
+    }
+
+    [RequireParkingPermission("subscriptions", "edit")]
+    [HttpPost("subscriptions/{subscriptionId:int}/reduce-slots")]
+    public async Task<ActionResult<ApiResponse<SlotReductionResultDto>>> ReduceSubscriptionSlots(int subscriptionId, [FromBody] ReduceSubscriptionSlotsRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.ReduceSubscriptionSlotsAsync(subscriptionId, StampOperator(request), cancellationToken);
+            return Ok(ApiResponse<SlotReductionResultDto>.Ok(data, "Subscription slots reduced and customer balance updated."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            await RecordSubscriptionFailureAsync("reduce_slots", "ParkingSubscription", subscriptionId.ToString(), "Slot reduction failed", ex.Message, cancellationToken);
+            return BadRequest(ApiResponse<SlotReductionResultDto>.Fail(ex.Message));
+        }
+    }
+
     [RequireParkingPermission("gate_operation", "entry")]
     [HttpPost("entry/update-generated-barcode-details")]
     public async Task<ActionResult<ApiResponse<GenerateBarcodeResponseDto>>> UpdateGeneratedBarcodeDetails([FromBody] UpdateGeneratedBarcodeDetailsRequest request, CancellationToken cancellationToken)

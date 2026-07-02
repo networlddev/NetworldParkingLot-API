@@ -16,6 +16,7 @@ public sealed class ParkingSubscription
     public decimal BalanceAmount { get; set; }
     public string Status { get; set; } = "Active";
     public bool IsExtraSlot { get; set; }
+    public bool AutoRenew { get; set; } = true;
     public int? SourceInvoiceId { get; set; }
     public string? Remarks { get; set; }
     public DateTime CreatedDate { get; set; } = DateTime.Now;
@@ -25,6 +26,9 @@ public sealed class ParkingSubscription
     public DateTime? CancelledDate { get; set; }
     public int? CancelledBy { get; set; }
     public string? CancellationReason { get; set; }
+    public DateTime? StoppedDate { get; set; }
+    public int? StoppedBy { get; set; }
+    public string? StopReason { get; set; }
 
     public ParkingCompany Company { get; set; } = default!;
 }

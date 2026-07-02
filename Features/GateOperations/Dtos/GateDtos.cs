@@ -16,6 +16,7 @@ public sealed record CompanySearchDto(
     string? ContactPerson,
     string? Mobile,
     string Status,
+    bool AutoRenewSubscriptions,
     int PurchasedSlots,
     int VehiclesInside,
     int AvailableSlots,
@@ -32,6 +33,7 @@ public sealed record CompanyGateStatusDto(
     string? ContactPerson,
     string? Mobile,
     string CompanyStatus,
+    bool AutoRenewSubscriptions,
     int PurchasedSlots,
     int VehiclesInside,
     int AvailableSlots,
@@ -416,6 +418,8 @@ public sealed record CompanyListItemDto(
     decimal CreditLimit,
     string? Remarks,
     string? InternalNotes,
+    bool AutoRenewSubscriptions,
+    decimal CustomerBalance,
     int PurchasedSlots,
     int VehiclesInside,
     int AvailableSlots,
@@ -440,6 +444,7 @@ public sealed record SubscriptionListItemDto(
     string PlanType,
     int SlotsPurchased,
     decimal RatePerSlot,
+    bool AutoRenew,
     DateTime StartDate,
     DateTime EndDate,
     int DurationDays,
@@ -461,6 +466,48 @@ public sealed record SubscriptionListItemDto(
     string ModifiedByName,
     string? Remarks,
     string? CancellationReason);
+
+public sealed record CompanyBalanceAdjustmentDto(
+    int BalanceAdjustmentId,
+    int CompanyId,
+    int? SubscriptionId,
+    int? InvoiceId,
+    string AdjustmentType,
+    decimal Amount,
+    decimal AppliedAmount,
+    decimal RemainingAmount,
+    string Reason,
+    int? OldSlots,
+    int? NewSlots,
+    DateTime? EffectiveDate,
+    DateTime CreatedDate,
+    string CreatedByName);
+
+public sealed record SlotReductionPreviewDto(
+    int SubscriptionId,
+    int CompanyId,
+    string CompanyName,
+    int CurrentSlots,
+    int NewSlots,
+    int RemovedSlots,
+    decimal RatePerSlot,
+    DateTime StartDate,
+    DateTime EndDate,
+    DateTime EffectiveDate,
+    int UsedDays,
+    int RemainingDays,
+    int TotalDays,
+    decimal UsedAmount,
+    decimal CreditAmount,
+    decimal NewSubscriptionTotal,
+    decimal CustomerBalanceAfterCredit,
+    string Message);
+
+public sealed record SlotReductionResultDto(
+    SubscriptionListItemDto Subscription,
+    CompanyBalanceAdjustmentDto Adjustment,
+    SlotReductionPreviewDto Preview,
+    string Message);
 
 public sealed record PagedSubscriptionResultDto(
     IReadOnlyList<SubscriptionListItemDto> Items,

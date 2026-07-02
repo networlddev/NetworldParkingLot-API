@@ -188,6 +188,7 @@ public sealed class CreateCompanyWithSubscriptionRequest
     public string? Trn { get; set; }
 
     public string Status { get; set; } = "Active";
+    public bool AutoRenewSubscriptions { get; set; } = true;
     public decimal OpeningBalance { get; set; }
     public string? BillingName { get; set; }
     public string? PaymentTerms { get; set; }
@@ -201,6 +202,10 @@ public sealed class CreateCompanyWithSubscriptionRequest
     [Range(1, 100000)]
     public int SlotsPurchased { get; set; }
 
+    [Range(0, double.MaxValue)]
+    public decimal RatePerSlot { get; set; }
+
+    public bool AutoRenew { get; set; } = true;
     public DateTime StartDate { get; set; } = DateTime.Today;
     public decimal DiscountAmount { get; set; }
     public decimal VatAmount { get; set; }
@@ -237,6 +242,7 @@ public sealed class UpdateCompanyRequest
     public string? Trn { get; set; }
 
     public string Status { get; set; } = "Active";
+    public bool AutoRenewSubscriptions { get; set; } = true;
     public decimal OpeningBalance { get; set; }
     public string? BillingName { get; set; }
     public string? PaymentTerms { get; set; }
@@ -281,6 +287,8 @@ public sealed class CreateSubscriptionRequest
     public bool IsExtraSlot { get; set; }
     public DateTime StartDate { get; set; } = DateTime.Today;
     public DateTime? EndDate { get; set; }
+    public decimal RatePerSlot { get; set; }
+    public bool AutoRenew { get; set; } = true;
     public decimal DiscountAmount { get; set; }
     public decimal VatAmount { get; set; }
     public decimal PaidAmount { get; set; }
@@ -302,6 +310,8 @@ public sealed class UpdateSubscriptionRequest
     public bool IsExtraSlot { get; set; }
     public DateTime StartDate { get; set; } = DateTime.Today;
     public DateTime? EndDate { get; set; }
+    public decimal RatePerSlot { get; set; }
+    public bool AutoRenew { get; set; } = true;
     public decimal DiscountAmount { get; set; }
     public decimal VatAmount { get; set; }
     public string Status { get; set; } = "Active";
@@ -324,6 +334,8 @@ public sealed class RenewSubscriptionRequest
     public int? SlotsPurchased { get; set; }
     public DateTime? StartDate { get; set; }
     public DateTime? EndDate { get; set; }
+    public decimal? RatePerSlot { get; set; }
+    public bool? AutoRenew { get; set; }
     public decimal DiscountAmount { get; set; }
     public decimal VatAmount { get; set; }
     public decimal PaidAmount { get; set; }
@@ -331,6 +343,17 @@ public sealed class RenewSubscriptionRequest
     public string? ReferenceNo { get; set; }
     public string? Remarks { get; set; }
 
+    public int OperatorId { get; set; }
+}
+
+public sealed class ReduceSubscriptionSlotsRequest
+{
+    [Range(1, 100000)]
+    public int NewSlotsPurchased { get; set; }
+
+    public DateTime? EffectiveDate { get; set; }
+    public bool ApplyCreditToOpenInvoices { get; set; } = true;
+    public string? Reason { get; set; }
     public int OperatorId { get; set; }
 }
 

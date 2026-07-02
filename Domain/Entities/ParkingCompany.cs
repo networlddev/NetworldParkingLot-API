@@ -13,6 +13,7 @@ public sealed class ParkingCompany
     public string? Address { get; set; }
     public string Status { get; set; } = "Active";
     public decimal OpeningBalance { get; set; }
+    public bool AutoRenewSubscriptions { get; set; } = true;
     public string? BillingName { get; set; }
     public string? PaymentTerms { get; set; }
     public decimal CreditLimit { get; set; }
@@ -26,4 +27,5 @@ public sealed class ParkingCompany
     public ICollection<ParkingSubscription> Subscriptions { get; set; } = [];
     public ICollection<ParkingInvoice> Invoices { get; set; } = [];
     public ICollection<ParkingSession> ParkingSessions { get; set; } = [];
+    public ICollection<ParkingCompanyBalanceAdjustment> BalanceAdjustments { get; set; } = [];
 }

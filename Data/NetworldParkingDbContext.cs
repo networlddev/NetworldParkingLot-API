@@ -16,6 +16,7 @@ public sealed class NetworldParkingDbContext(DbContextOptions<NetworldParkingDbC
     public DbSet<ParkingSubscription> ParkingSubscriptions => Set<ParkingSubscription>();
     public DbSet<ParkingInvoice> ParkingInvoices => Set<ParkingInvoice>();
     public DbSet<ParkingPayment> ParkingPayments => Set<ParkingPayment>();
+    public DbSet<ParkingCompanyBalanceAdjustment> ParkingCompanyBalanceAdjustments => Set<ParkingCompanyBalanceAdjustment>();
     public DbSet<ParkingSession> ParkingSessions => Set<ParkingSession>();
     public DbSet<GateActivityLog> GateActivityLogs => Set<GateActivityLog>();
     public DbSet<OutsideDisplayEvent> OutsideDisplayEvents => Set<OutsideDisplayEvent>();
@@ -81,6 +82,7 @@ public sealed class NetworldParkingDbContext(DbContextOptions<NetworldParkingDbC
         modelBuilder.Entity<ParkingCompany>().HasIndex(x => x.CompanyCode).IsUnique();
         modelBuilder.Entity<ParkingCompany>().Property(x => x.OpeningBalance).HasPrecision(18, 2);
         modelBuilder.Entity<ParkingCompany>().Property(x => x.CreditLimit).HasPrecision(18, 2);
+        modelBuilder.Entity<ParkingCompany>().Property(x => x.AutoRenewSubscriptions).HasDefaultValue(true);
 
         modelBuilder.Entity<ParkingSubscription>().HasKey(x => x.SubscriptionId);
         modelBuilder.Entity<ParkingSubscription>().Property(x => x.RatePerSlot).HasPrecision(18, 2);
@@ -89,9 +91,20 @@ public sealed class NetworldParkingDbContext(DbContextOptions<NetworldParkingDbC
         modelBuilder.Entity<ParkingSubscription>().Property(x => x.TotalAmount).HasPrecision(18, 2);
         modelBuilder.Entity<ParkingSubscription>().Property(x => x.PaidAmount).HasPrecision(18, 2);
         modelBuilder.Entity<ParkingSubscription>().Property(x => x.BalanceAmount).HasPrecision(18, 2);
+        modelBuilder.Entity<ParkingSubscription>().Property(x => x.AutoRenew).HasDefaultValue(true);
         modelBuilder.Entity<ParkingSubscription>()
             .HasOne(x => x.Company)
             .WithMany(x => x.Subscriptions)
+            .HasForeignKey(x => x.CompanyId);
+
+        modelBuilder.Entity<ParkingCompanyBalanceAdjustment>().HasKey(x => x.BalanceAdjustmentId);
+        modelBuilder.Entity<ParkingCompanyBalanceAdjustment>().HasIndex(x => new { x.CompanyId, x.CreatedDate });
+        modelBuilder.Entity<ParkingCompanyBalanceAdjustment>().Property(x => x.Amount).HasPrecision(18, 2);
+        modelBuilder.Entity<ParkingCompanyBalanceAdjustment>().Property(x => x.AppliedAmount).HasPrecision(18, 2);
+        modelBuilder.Entity<ParkingCompanyBalanceAdjustment>().Property(x => x.RemainingAmount).HasPrecision(18, 2);
+        modelBuilder.Entity<ParkingCompanyBalanceAdjustment>()
+            .HasOne(x => x.Company)
+            .WithMany(x => x.BalanceAdjustments)
             .HasForeignKey(x => x.CompanyId);
 
         modelBuilder.Entity<ParkingInvoice>().HasKey(x => x.InvoiceId);

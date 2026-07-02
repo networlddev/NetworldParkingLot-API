@@ -13,6 +13,7 @@ public static class ParkingConstants
     {
         public const string Active = "Active";
         public const string Expired = "Expired";
+        public const string Inactive = "Inactive";
         public const string Cancelled = "Cancelled";
     }
 
