@@ -442,6 +442,7 @@ public sealed record SubscriptionListItemDto(
     string CompanyCode,
     string CompanyName,
     string PlanType,
+    int? RatePlanId,
     int SlotsPurchased,
     decimal RatePerSlot,
     bool AutoRenew,

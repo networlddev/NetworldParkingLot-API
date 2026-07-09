@@ -728,9 +728,10 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         var endDate = request.EndDate.HasValue && request.EndDate.Value.Date > startDate
             ? request.EndDate.Value.Date
             : CalculateSubscriptionEndDate(renewalRatePlan, planType, startDate);
+        var hasSlotOverride = request.SlotsPurchased.HasValue && request.SlotsPurchased.Value != existing.SlotsPurchased;
         var renewalAllocations = request.VehicleTypeAllocations.Count > 0
             ? request.VehicleTypeAllocations
-            : request.SlotsPurchased.HasValue
+            : hasSlotOverride
                 ? []
                 : await GetSubscriptionAllocationRequestsAsync(existing.SubscriptionId, cancellationToken);
         var slots = renewalAllocations.Count > 0
@@ -1178,6 +1179,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                 subscription.Company.CompanyCode,
                 subscription.Company.CompanyName,
                 subscription.PlanType,
+                subscription.RatePlanId,
                 subscription.SlotsPurchased,
                 subscription.RatePerSlot,
                 subscription.AutoRenew,
