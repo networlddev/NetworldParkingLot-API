@@ -3250,12 +3250,14 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         await ReassignInsideSessionsToActiveSubscriptionsAsync(session.CompanyId, operatorId, cancellationToken);
 
         var settings = await repository.GetSettingsAsync(cancellationToken);
-        var overstayDailyCharge = GetDecimalSetting(settings, "OverstayDailyCharge", 50m);
+        var overstayDailyCharge = await ResolveOverstayDailyChargeAsync(session, settings, cancellationToken);
         var overstayDays = 0;
         if (session.Subscription?.EndDate.Date < now.Date)
             overstayDays = (now.Date - session.Subscription.EndDate.Date).Days;
 
-        var overstayAmount = overstayDays * overstayDailyCharge;
+        var overstayBaseAmount = overstayDays * overstayDailyCharge;
+        var overstayAmountSelection = CalculateInvoiceAmountsFromSubTotal(settings, overstayBaseAmount, 0, 0, null, null);
+        var overstayAmount = overstayAmountSelection.TotalAmount;
 
         session.OverstayDays = overstayDays;
         session.OverstayAmount = overstayAmount;
@@ -3315,20 +3317,33 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
         if (existing != null)
         {
+            var amount = await BuildOverstayInvoiceAmountAsync(session, cancellationToken);
             // If the vehicle is scanned again before payment and the overstay days changed,
             // keep the unpaid overstay invoice synchronized with the latest calculated amount.
-            if (existing.PaidAmount <= 0 && existing.BalanceAmount > 0 && existing.TotalAmount != session.OverstayAmount)
+            if (existing.PaidAmount <= 0 &&
+                existing.BalanceAmount > 0 &&
+                (existing.TotalAmount != amount.TotalAmount ||
+                 existing.SubTotal != amount.SubTotal ||
+                 existing.VatAmount != amount.VatAmount ||
+                 existing.VatPercent != amount.VatPercent ||
+                 !existing.VatMode.Equals(amount.VatMode, StringComparison.OrdinalIgnoreCase)))
             {
-                existing.SubTotal = session.OverstayAmount;
-                existing.TotalAmount = session.OverstayAmount;
-                existing.BalanceAmount = session.OverstayAmount;
+                existing.SubTotal = amount.SubTotal;
+                existing.VatAmount = amount.VatAmount;
+                existing.VatPercent = amount.VatPercent;
+                existing.VatMode = amount.VatMode;
+                existing.TotalAmount = amount.TotalAmount;
+                existing.BalanceAmount = amount.TotalAmount;
                 existing.Status = ParkingConstants.PaymentStatus.Unpaid;
                 existing.Remarks = $"Overstay charge for barcode {session.BarcodeNo} - {session.OverstayDays} day(s)";
+                session.OverstayAmount = amount.TotalAmount;
             }
 
             return;
         }
 
+        var invoiceAmount = await BuildOverstayInvoiceAmountAsync(session, cancellationToken);
+        session.OverstayAmount = invoiceAmount.TotalAmount;
         var invoiceNo = await GenerateNextInvoiceNoAsync(cancellationToken);
         await db.ParkingInvoices.AddAsync(new ParkingInvoice
         {
@@ -3339,14 +3354,57 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             InvoiceDate = DateTime.Now,
             DueDate = DateTime.Today,
             Slots = 0,
-            SubTotal = session.OverstayAmount,
-            TotalAmount = session.OverstayAmount,
-            BalanceAmount = session.OverstayAmount,
+            SubTotal = invoiceAmount.SubTotal,
+            VatAmount = invoiceAmount.VatAmount,
+            VatPercent = invoiceAmount.VatPercent,
+            VatMode = invoiceAmount.VatMode,
+            TotalAmount = invoiceAmount.TotalAmount,
+            BalanceAmount = invoiceAmount.TotalAmount,
             Status = ParkingConstants.PaymentStatus.Unpaid,
             Remarks = $"Overstay charge for barcode {session.BarcodeNo} - {session.OverstayDays} day(s)",
             CreatedBy = operatorId,
             CreatedDate = DateTime.Now
         }, cancellationToken);
+    }
+
+    private async Task<InvoiceAmountSelection> BuildOverstayInvoiceAmountAsync(ParkingSession session, CancellationToken cancellationToken)
+    {
+        var settings = await repository.GetSettingsAsync(cancellationToken);
+        var dailyRate = await ResolveOverstayDailyChargeAsync(session, settings, cancellationToken);
+        var subTotal = Math.Max(session.OverstayDays, 0) * dailyRate;
+        return CalculateInvoiceAmountsFromSubTotal(settings, subTotal, 0, 0, null, null);
+    }
+
+    private async Task<decimal> ResolveOverstayDailyChargeAsync(
+        ParkingSession session,
+        Dictionary<string, string> settings,
+        CancellationToken cancellationToken)
+    {
+        var fallback = GetDecimalSetting(settings, "OverstayDailyCharge", 50m);
+        var subscription = session.Subscription;
+        if (subscription == null || subscription.RatePlanId == null)
+            return fallback;
+
+        var periodDays = Math.Max((subscription.EndDate.Date - subscription.StartDate.Date).Days + 1, 1);
+        var ratePerSlot = subscription.RatePerSlot;
+        var vehicleTypeName = (session.VehicleType ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(vehicleTypeName))
+        {
+            var allocationRate = await db.ParkingSubscriptionVehicleAllocations
+                .AsNoTracking()
+                .Where(x => x.SubscriptionId == subscription.SubscriptionId &&
+                            x.VehicleType != null &&
+                            x.VehicleType.VehicleTypeName == vehicleTypeName)
+                .Select(x => (decimal?)x.RatePerSlot)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (allocationRate.HasValue && allocationRate.Value > 0)
+                ratePerSlot = allocationRate.Value;
+        }
+
+        if (ratePerSlot <= 0)
+            return fallback;
+
+        return Math.Round(ratePerSlot / periodDays, 2, MidpointRounding.AwayFromZero);
     }
 
     private async Task<IReadOnlyList<PaymentAllocation>> ApplyPaymentToOldestInvoicesAsync(int companyId, decimal amount, CancellationToken cancellationToken)
