@@ -1186,6 +1186,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                 durationDays,
                 subscription.DiscountAmount,
                 subscription.VatAmount,
+                subscription.VatPercent,
+                subscription.VatMode,
                 invoice?.TotalAmount ?? subscription.TotalAmount,
                 invoice?.PaidAmount ?? subscription.PaidAmount,
                 invoice?.BalanceAmount ?? subscription.BalanceAmount,

@@ -450,6 +450,8 @@ public sealed record SubscriptionListItemDto(
     int DurationDays,
     decimal DiscountAmount,
     decimal VatAmount,
+    decimal VatPercent,
+    string VatMode,
     decimal TotalAmount,
     decimal PaidAmount,
     decimal BalanceAmount,
