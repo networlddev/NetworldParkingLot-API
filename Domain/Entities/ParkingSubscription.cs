@@ -5,12 +5,16 @@ public sealed class ParkingSubscription
     public int SubscriptionId { get; set; }
     public int CompanyId { get; set; }
     public string PlanType { get; set; } = "Monthly";
+    public int? RatePlanId { get; set; }
+    public int? VehicleTypeId { get; set; }
     public int SlotsPurchased { get; set; }
     public decimal RatePerSlot { get; set; }
     public DateTime StartDate { get; set; }
     public DateTime EndDate { get; set; }
     public decimal DiscountAmount { get; set; }
     public decimal VatAmount { get; set; }
+    public decimal VatPercent { get; set; }
+    public string VatMode { get; set; } = "Exclusive";
     public decimal TotalAmount { get; set; }
     public decimal PaidAmount { get; set; }
     public decimal BalanceAmount { get; set; }
@@ -31,4 +35,6 @@ public sealed class ParkingSubscription
     public string? StopReason { get; set; }
 
     public ParkingCompany Company { get; set; } = default!;
+    public ParkingRatePlan? RatePlan { get; set; }
+    public ParkingVehicleType? VehicleType { get; set; }
 }

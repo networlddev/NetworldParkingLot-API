@@ -4184,8 +4184,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
     private static DateTime CalculateExtraSlotEndDate(string planType, DateTime startDate) =>
         NormalizeExtraSlotPlanType(planType) switch
         {
-            "Weekly" => startDate.AddDays(7),
-            "Monthly" => startDate.AddMonths(1),
+            "Weekly" => startDate.AddDays(6),
+            "Monthly" => startDate.AddMonths(1).AddDays(-1),
             _ => startDate.AddDays(1)
         };
 

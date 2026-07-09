@@ -10,10 +10,12 @@ public sealed class ParkingPayment
     public string PaymentType { get; set; } = "Invoice";
     public decimal Amount { get; set; }
     public string PaymentMode { get; set; } = "Cash";
+    public int? BankAccountId { get; set; }
     public string? ReferenceNo { get; set; }
     public int ReceivedBy { get; set; }
     public DateTime PaymentDate { get; set; } = DateTime.Now;
     public string? Remarks { get; set; }
 
     public ParkingCompany Company { get; set; } = default!;
+    public ParkingBankAccount? BankAccount { get; set; }
 }

@@ -11,10 +11,14 @@ public sealed class ParkingInvoice
     public DateTime InvoiceDate { get; set; } = DateTime.Now;
     public DateTime? DueDate { get; set; }
     public string? PlanType { get; set; }
+    public int? RatePlanId { get; set; }
+    public int? VehicleTypeId { get; set; }
     public int Slots { get; set; }
     public decimal SubTotal { get; set; }
     public decimal DiscountAmount { get; set; }
     public decimal VatAmount { get; set; }
+    public decimal VatPercent { get; set; }
+    public string VatMode { get; set; } = "Exclusive";
     public decimal TotalAmount { get; set; }
     public decimal PaidAmount { get; set; }
     public decimal BalanceAmount { get; set; }
@@ -29,4 +33,6 @@ public sealed class ParkingInvoice
     public string? CancellationReason { get; set; }
 
     public ParkingCompany Company { get; set; } = default!;
+    public ParkingRatePlan? RatePlan { get; set; }
+    public ParkingVehicleType? VehicleType { get; set; }
 }

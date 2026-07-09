@@ -113,6 +113,7 @@ public sealed class CollectPaymentRequest
     [Required]
     public string PaymentMode { get; set; } = "Cash";
 
+    public int? BankAccountId { get; set; }
     public string? ReferenceNo { get; set; }
     public string? Remarks { get; set; }
     public bool SavePaymentAndAllowExit { get; set; }
@@ -131,6 +132,9 @@ public sealed class CreateExtraSlotInvoiceRequest
     [Required]
     public string PlanType { get; set; } = "Daily";
 
+    public int? RatePlanId { get; set; }
+    public int? VehicleTypeId { get; set; }
+
     [Range(0, double.MaxValue)]
     public decimal RatePerSlot { get; set; }
 
@@ -138,8 +142,11 @@ public sealed class CreateExtraSlotInvoiceRequest
     public DateTime EndDate { get; set; } = DateTime.Today.AddDays(1);
     public decimal DiscountAmount { get; set; }
     public decimal VatAmount { get; set; }
+    public decimal? VatPercent { get; set; }
+    public string? VatMode { get; set; }
     public decimal PaidAmount { get; set; }
     public string PaymentMode { get; set; } = "Cash";
+    public int? BankAccountId { get; set; }
     public string? ReferenceNo { get; set; }
     public string? Remarks { get; set; }
 
@@ -199,6 +206,9 @@ public sealed class CreateCompanyWithSubscriptionRequest
     [Required]
     public string PlanType { get; set; } = "Monthly";
 
+    public int? RatePlanId { get; set; }
+    public int? VehicleTypeId { get; set; }
+
     [Range(1, 100000)]
     public int SlotsPurchased { get; set; }
 
@@ -209,8 +219,11 @@ public sealed class CreateCompanyWithSubscriptionRequest
     public DateTime StartDate { get; set; } = DateTime.Today;
     public decimal DiscountAmount { get; set; }
     public decimal VatAmount { get; set; }
+    public decimal? VatPercent { get; set; }
+    public string? VatMode { get; set; }
     public decimal PaidAmount { get; set; }
     public string PaymentMode { get; set; } = "Cash";
+    public int? BankAccountId { get; set; }
     public string? ReferenceNo { get; set; }
 
     public int OperatorId { get; set; }
@@ -281,6 +294,9 @@ public sealed class CreateSubscriptionRequest
     [Required]
     public string PlanType { get; set; } = "Monthly";
 
+    public int? RatePlanId { get; set; }
+    public int? VehicleTypeId { get; set; }
+
     [Range(1, 100000)]
     public int SlotsPurchased { get; set; }
 
@@ -291,8 +307,11 @@ public sealed class CreateSubscriptionRequest
     public bool AutoRenew { get; set; } = true;
     public decimal DiscountAmount { get; set; }
     public decimal VatAmount { get; set; }
+    public decimal? VatPercent { get; set; }
+    public string? VatMode { get; set; }
     public decimal PaidAmount { get; set; }
     public string PaymentMode { get; set; } = "Cash";
+    public int? BankAccountId { get; set; }
     public string? ReferenceNo { get; set; }
     public string? Remarks { get; set; }
 
@@ -304,6 +323,9 @@ public sealed class UpdateSubscriptionRequest
     [Required]
     public string PlanType { get; set; } = "Monthly";
 
+    public int? RatePlanId { get; set; }
+    public int? VehicleTypeId { get; set; }
+
     [Range(1, 100000)]
     public int SlotsPurchased { get; set; }
 
@@ -314,6 +336,8 @@ public sealed class UpdateSubscriptionRequest
     public bool AutoRenew { get; set; } = true;
     public decimal DiscountAmount { get; set; }
     public decimal VatAmount { get; set; }
+    public decimal? VatPercent { get; set; }
+    public string? VatMode { get; set; }
     public string Status { get; set; } = "Active";
     public string? Remarks { get; set; }
 
@@ -347,8 +371,11 @@ public sealed class RenewSubscriptionRequest
     public bool? AutoRenew { get; set; }
     public decimal DiscountAmount { get; set; }
     public decimal VatAmount { get; set; }
+    public decimal? VatPercent { get; set; }
+    public string? VatMode { get; set; }
     public decimal PaidAmount { get; set; }
     public string PaymentMode { get; set; } = "Cash";
+    public int? BankAccountId { get; set; }
     public string? ReferenceNo { get; set; }
     public string? Remarks { get; set; }
 

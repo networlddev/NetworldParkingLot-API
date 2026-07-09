@@ -38,7 +38,9 @@ public sealed class RateSettingsDto
     public decimal WeeklyRatePerSlot { get; set; } = 150m;
     public decimal MonthlyRatePerSlot { get; set; } = 500m;
     public decimal OverstayDailyCharge { get; set; } = 50m;
+    public bool VatEnabled { get; set; } = true;
     public decimal DefaultVatPercent { get; set; } = 5m;
+    public string DefaultVatMode { get; set; } = "Exclusive";
     public bool BlockEntryIfPaymentDue { get; set; }
 }
 
@@ -114,4 +116,64 @@ public sealed class OutsideDisplaySettingsDto
     public string OutsideDisplayOverstaySubMessage { get; set; } = "Please park aside and clear payment.";
     public string OutsideDisplayInvalidMainMessage { get; set; } = "INVALID BARCODE";
     public string OutsideDisplayInvalidSubMessage { get; set; } = "Please contact staff.";
+}
+
+public sealed record ParkingRatePlanDto(
+    int RatePlanId,
+    string PlanName,
+    string PeriodUnit,
+    int PeriodValue,
+    decimal RatePerSlot,
+    bool IsSystemDefault,
+    bool IsActive,
+    int SortOrder,
+    string? Remarks);
+
+public sealed class SaveParkingRatePlanRequest
+{
+    public string PlanName { get; set; } = string.Empty;
+    public string PeriodUnit { get; set; } = "Days";
+    public int PeriodValue { get; set; } = 1;
+    public decimal RatePerSlot { get; set; }
+    public bool IsActive { get; set; } = true;
+    public int SortOrder { get; set; }
+    public string? Remarks { get; set; }
+}
+
+public sealed record ParkingVehicleTypeDto(
+    int VehicleTypeId,
+    string VehicleTypeName,
+    string? Description,
+    bool IsActive,
+    int SortOrder);
+
+public sealed class SaveParkingVehicleTypeRequest
+{
+    public string VehicleTypeName { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public bool IsActive { get; set; } = true;
+    public int SortOrder { get; set; }
+}
+
+public sealed record ParkingBankAccountDto(
+    int BankAccountId,
+    string BankName,
+    string? AccountName,
+    string? AccountNumber,
+    string? Iban,
+    string? BranchName,
+    bool IsActive,
+    int SortOrder,
+    string? Remarks);
+
+public sealed class SaveParkingBankAccountRequest
+{
+    public string BankName { get; set; } = string.Empty;
+    public string? AccountName { get; set; }
+    public string? AccountNumber { get; set; }
+    public string? Iban { get; set; }
+    public string? BranchName { get; set; }
+    public bool IsActive { get; set; } = true;
+    public int SortOrder { get; set; }
+    public string? Remarks { get; set; }
 }

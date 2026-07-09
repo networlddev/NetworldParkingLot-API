@@ -17,6 +17,10 @@ public sealed class NetworldParkingDbContext(DbContextOptions<NetworldParkingDbC
     public DbSet<ParkingInvoice> ParkingInvoices => Set<ParkingInvoice>();
     public DbSet<ParkingPayment> ParkingPayments => Set<ParkingPayment>();
     public DbSet<ParkingCompanyBalanceAdjustment> ParkingCompanyBalanceAdjustments => Set<ParkingCompanyBalanceAdjustment>();
+    public DbSet<ParkingRatePlan> ParkingRatePlans => Set<ParkingRatePlan>();
+    public DbSet<ParkingVehicleType> ParkingVehicleTypes => Set<ParkingVehicleType>();
+    public DbSet<ParkingBankAccount> ParkingBankAccounts => Set<ParkingBankAccount>();
+    public DbSet<ParkingRateVehicleTypeMapping> ParkingRateVehicleTypeMappings => Set<ParkingRateVehicleTypeMapping>();
     public DbSet<ParkingSession> ParkingSessions => Set<ParkingSession>();
     public DbSet<GateActivityLog> GateActivityLogs => Set<GateActivityLog>();
     public DbSet<OutsideDisplayEvent> OutsideDisplayEvents => Set<OutsideDisplayEvent>();
@@ -88,6 +92,7 @@ public sealed class NetworldParkingDbContext(DbContextOptions<NetworldParkingDbC
         modelBuilder.Entity<ParkingSubscription>().Property(x => x.RatePerSlot).HasPrecision(18, 2);
         modelBuilder.Entity<ParkingSubscription>().Property(x => x.DiscountAmount).HasPrecision(18, 2);
         modelBuilder.Entity<ParkingSubscription>().Property(x => x.VatAmount).HasPrecision(18, 2);
+        modelBuilder.Entity<ParkingSubscription>().Property(x => x.VatPercent).HasPrecision(9, 4);
         modelBuilder.Entity<ParkingSubscription>().Property(x => x.TotalAmount).HasPrecision(18, 2);
         modelBuilder.Entity<ParkingSubscription>().Property(x => x.PaidAmount).HasPrecision(18, 2);
         modelBuilder.Entity<ParkingSubscription>().Property(x => x.BalanceAmount).HasPrecision(18, 2);
@@ -96,6 +101,16 @@ public sealed class NetworldParkingDbContext(DbContextOptions<NetworldParkingDbC
             .HasOne(x => x.Company)
             .WithMany(x => x.Subscriptions)
             .HasForeignKey(x => x.CompanyId);
+        modelBuilder.Entity<ParkingSubscription>()
+            .HasOne(x => x.RatePlan)
+            .WithMany()
+            .HasForeignKey(x => x.RatePlanId)
+            .OnDelete(DeleteBehavior.NoAction);
+        modelBuilder.Entity<ParkingSubscription>()
+            .HasOne(x => x.VehicleType)
+            .WithMany()
+            .HasForeignKey(x => x.VehicleTypeId)
+            .OnDelete(DeleteBehavior.NoAction);
 
         modelBuilder.Entity<ParkingCompanyBalanceAdjustment>().HasKey(x => x.BalanceAdjustmentId);
         modelBuilder.Entity<ParkingCompanyBalanceAdjustment>().HasIndex(x => new { x.CompanyId, x.CreatedDate });
@@ -112,13 +127,51 @@ public sealed class NetworldParkingDbContext(DbContextOptions<NetworldParkingDbC
         modelBuilder.Entity<ParkingInvoice>().Property(x => x.SubTotal).HasPrecision(18, 2);
         modelBuilder.Entity<ParkingInvoice>().Property(x => x.DiscountAmount).HasPrecision(18, 2);
         modelBuilder.Entity<ParkingInvoice>().Property(x => x.VatAmount).HasPrecision(18, 2);
+        modelBuilder.Entity<ParkingInvoice>().Property(x => x.VatPercent).HasPrecision(9, 4);
         modelBuilder.Entity<ParkingInvoice>().Property(x => x.TotalAmount).HasPrecision(18, 2);
         modelBuilder.Entity<ParkingInvoice>().Property(x => x.PaidAmount).HasPrecision(18, 2);
         modelBuilder.Entity<ParkingInvoice>().Property(x => x.BalanceAmount).HasPrecision(18, 2);
+        modelBuilder.Entity<ParkingInvoice>()
+            .HasOne(x => x.RatePlan)
+            .WithMany()
+            .HasForeignKey(x => x.RatePlanId)
+            .OnDelete(DeleteBehavior.NoAction);
+        modelBuilder.Entity<ParkingInvoice>()
+            .HasOne(x => x.VehicleType)
+            .WithMany()
+            .HasForeignKey(x => x.VehicleTypeId)
+            .OnDelete(DeleteBehavior.NoAction);
 
         modelBuilder.Entity<ParkingPayment>().HasKey(x => x.PaymentId);
         modelBuilder.Entity<ParkingPayment>().HasIndex(x => x.ReceiptNo).IsUnique();
         modelBuilder.Entity<ParkingPayment>().Property(x => x.Amount).HasPrecision(18, 2);
+        modelBuilder.Entity<ParkingPayment>()
+            .HasOne(x => x.BankAccount)
+            .WithMany()
+            .HasForeignKey(x => x.BankAccountId)
+            .OnDelete(DeleteBehavior.NoAction);
+
+        modelBuilder.Entity<ParkingRatePlan>().HasKey(x => x.RatePlanId);
+        modelBuilder.Entity<ParkingRatePlan>().HasIndex(x => x.PlanName).IsUnique();
+        modelBuilder.Entity<ParkingRatePlan>().Property(x => x.RatePerSlot).HasPrecision(18, 2);
+
+        modelBuilder.Entity<ParkingVehicleType>().HasKey(x => x.VehicleTypeId);
+        modelBuilder.Entity<ParkingVehicleType>().HasIndex(x => x.VehicleTypeName).IsUnique();
+
+        modelBuilder.Entity<ParkingBankAccount>().HasKey(x => x.BankAccountId);
+        modelBuilder.Entity<ParkingBankAccount>().HasIndex(x => x.BankName);
+
+        modelBuilder.Entity<ParkingRateVehicleTypeMapping>().HasKey(x => x.RateVehicleTypeMappingId);
+        modelBuilder.Entity<ParkingRateVehicleTypeMapping>().HasIndex(x => new { x.RatePlanId, x.VehicleTypeId }).IsUnique();
+        modelBuilder.Entity<ParkingRateVehicleTypeMapping>().Property(x => x.RatePerSlotOverride).HasPrecision(18, 2);
+        modelBuilder.Entity<ParkingRateVehicleTypeMapping>()
+            .HasOne(x => x.RatePlan)
+            .WithMany()
+            .HasForeignKey(x => x.RatePlanId);
+        modelBuilder.Entity<ParkingRateVehicleTypeMapping>()
+            .HasOne(x => x.VehicleType)
+            .WithMany()
+            .HasForeignKey(x => x.VehicleTypeId);
 
         modelBuilder.Entity<ParkingSession>().HasKey(x => x.SessionId);
         modelBuilder.Entity<ParkingSession>().HasIndex(x => x.BarcodeNo).IsUnique();

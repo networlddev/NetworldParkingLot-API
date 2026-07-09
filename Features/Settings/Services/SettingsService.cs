@@ -99,6 +99,162 @@ public sealed class SettingsService(NetworldParkingDbContext db, ISystemActivity
         return await GetSettingsAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<ParkingRatePlanDto>> GetRatePlansAsync(bool includeInactive = false, CancellationToken cancellationToken = default)
+    {
+        var query = db.ParkingRatePlans.AsNoTracking();
+        if (!includeInactive)
+            query = query.Where(x => x.IsActive);
+
+        var rows = await query
+            .OrderBy(x => x.SortOrder)
+            .ThenBy(x => x.PlanName)
+            .ToListAsync(cancellationToken);
+
+        return rows.Select(ToRatePlanDto).ToList();
+    }
+
+    public async Task<ParkingRatePlanDto> SaveRatePlanAsync(int? ratePlanId, SaveParkingRatePlanRequest request, int operatorId, CancellationToken cancellationToken = default)
+    {
+        var name = CleanText(request.PlanName, 80, string.Empty);
+        if (string.IsNullOrWhiteSpace(name))
+            throw new InvalidOperationException("Rate plan name is required.");
+
+        var periodUnit = NormalizePeriodUnit(request.PeriodUnit);
+        if (request.PeriodValue <= 0)
+            throw new InvalidOperationException("Rate plan period value must be greater than zero.");
+        if (request.RatePerSlot < 0)
+            throw new InvalidOperationException("Rate per slot cannot be negative.");
+
+        var duplicate = await db.ParkingRatePlans.AnyAsync(x =>
+            x.PlanName == name &&
+            (!ratePlanId.HasValue || x.RatePlanId != ratePlanId.Value),
+            cancellationToken);
+        if (duplicate)
+            throw new InvalidOperationException("A rate plan with this name already exists.");
+
+        ParkingRatePlan row;
+        if (ratePlanId.HasValue && ratePlanId.Value > 0)
+        {
+            row = await db.ParkingRatePlans.FirstOrDefaultAsync(x => x.RatePlanId == ratePlanId.Value, cancellationToken)
+                ?? throw new InvalidOperationException("Rate plan not found.");
+            row.ModifiedBy = operatorId;
+            row.ModifiedDate = DateTime.Now;
+        }
+        else
+        {
+            row = new ParkingRatePlan { CreatedBy = operatorId, CreatedDate = DateTime.Now };
+            await db.ParkingRatePlans.AddAsync(row, cancellationToken);
+        }
+
+        row.PlanName = name;
+        row.PeriodUnit = periodUnit;
+        row.PeriodValue = request.PeriodValue;
+        row.RatePerSlot = request.RatePerSlot;
+        row.IsActive = request.IsActive;
+        row.SortOrder = request.SortOrder;
+        row.Remarks = TrimOrNull(request.Remarks);
+
+        await db.SaveChangesAsync(cancellationToken);
+        return ToRatePlanDto(row);
+    }
+
+    public async Task<IReadOnlyList<ParkingVehicleTypeDto>> GetVehicleTypesAsync(bool includeInactive = false, CancellationToken cancellationToken = default)
+    {
+        var query = db.ParkingVehicleTypes.AsNoTracking();
+        if (!includeInactive)
+            query = query.Where(x => x.IsActive);
+
+        var rows = await query
+            .OrderBy(x => x.SortOrder)
+            .ThenBy(x => x.VehicleTypeName)
+            .ToListAsync(cancellationToken);
+
+        return rows.Select(ToVehicleTypeDto).ToList();
+    }
+
+    public async Task<ParkingVehicleTypeDto> SaveVehicleTypeAsync(int? vehicleTypeId, SaveParkingVehicleTypeRequest request, int operatorId, CancellationToken cancellationToken = default)
+    {
+        var name = CleanText(request.VehicleTypeName, 60, string.Empty);
+        if (string.IsNullOrWhiteSpace(name))
+            throw new InvalidOperationException("Vehicle type name is required.");
+
+        var duplicate = await db.ParkingVehicleTypes.AnyAsync(x =>
+            x.VehicleTypeName == name &&
+            (!vehicleTypeId.HasValue || x.VehicleTypeId != vehicleTypeId.Value),
+            cancellationToken);
+        if (duplicate)
+            throw new InvalidOperationException("A vehicle type with this name already exists.");
+
+        ParkingVehicleType row;
+        if (vehicleTypeId.HasValue && vehicleTypeId.Value > 0)
+        {
+            row = await db.ParkingVehicleTypes.FirstOrDefaultAsync(x => x.VehicleTypeId == vehicleTypeId.Value, cancellationToken)
+                ?? throw new InvalidOperationException("Vehicle type not found.");
+            row.ModifiedBy = operatorId;
+            row.ModifiedDate = DateTime.Now;
+        }
+        else
+        {
+            row = new ParkingVehicleType { CreatedBy = operatorId, CreatedDate = DateTime.Now };
+            await db.ParkingVehicleTypes.AddAsync(row, cancellationToken);
+        }
+
+        row.VehicleTypeName = name;
+        row.Description = TrimOrNull(request.Description);
+        row.IsActive = request.IsActive;
+        row.SortOrder = request.SortOrder;
+
+        await db.SaveChangesAsync(cancellationToken);
+        return ToVehicleTypeDto(row);
+    }
+
+    public async Task<IReadOnlyList<ParkingBankAccountDto>> GetBankAccountsAsync(bool includeInactive = false, CancellationToken cancellationToken = default)
+    {
+        var query = db.ParkingBankAccounts.AsNoTracking();
+        if (!includeInactive)
+            query = query.Where(x => x.IsActive);
+
+        var rows = await query
+            .OrderBy(x => x.SortOrder)
+            .ThenBy(x => x.BankName)
+            .ToListAsync(cancellationToken);
+
+        return rows.Select(ToBankAccountDto).ToList();
+    }
+
+    public async Task<ParkingBankAccountDto> SaveBankAccountAsync(int? bankAccountId, SaveParkingBankAccountRequest request, int operatorId, CancellationToken cancellationToken = default)
+    {
+        var bankName = CleanText(request.BankName, 120, string.Empty);
+        if (string.IsNullOrWhiteSpace(bankName))
+            throw new InvalidOperationException("Bank name is required.");
+
+        ParkingBankAccount row;
+        if (bankAccountId.HasValue && bankAccountId.Value > 0)
+        {
+            row = await db.ParkingBankAccounts.FirstOrDefaultAsync(x => x.BankAccountId == bankAccountId.Value, cancellationToken)
+                ?? throw new InvalidOperationException("Bank account not found.");
+            row.ModifiedBy = operatorId;
+            row.ModifiedDate = DateTime.Now;
+        }
+        else
+        {
+            row = new ParkingBankAccount { CreatedBy = operatorId, CreatedDate = DateTime.Now };
+            await db.ParkingBankAccounts.AddAsync(row, cancellationToken);
+        }
+
+        row.BankName = bankName;
+        row.AccountName = TrimOrNull(CleanText(request.AccountName, 120, string.Empty));
+        row.AccountNumber = TrimOrNull(CleanText(request.AccountNumber, 80, string.Empty));
+        row.Iban = TrimOrNull(CleanText(request.Iban, 80, string.Empty));
+        row.BranchName = TrimOrNull(CleanText(request.BranchName, 120, string.Empty));
+        row.IsActive = request.IsActive;
+        row.SortOrder = request.SortOrder;
+        row.Remarks = TrimOrNull(request.Remarks);
+
+        await db.SaveChangesAsync(cancellationToken);
+        return ToBankAccountDto(row);
+    }
+
     private async Task<Dictionary<string, string>> LoadSettingsDictionaryAsync(CancellationToken cancellationToken)
     {
         var rows = await db.SystemSettings
@@ -130,7 +286,9 @@ public sealed class SettingsService(NetworldParkingDbContext db, ISystemActivity
             WeeklyRatePerSlot = ReadDecimal(settings, "WeeklyRatePerSlot", 150m),
             MonthlyRatePerSlot = ReadDecimal(settings, "MonthlyRatePerSlot", 500m),
             OverstayDailyCharge = ReadDecimal(settings, "OverstayDailyCharge", 50m),
+            VatEnabled = ReadBool(settings, "VatEnabled", true),
             DefaultVatPercent = ReadDecimal(settings, "DefaultVatPercent", 5m),
+            DefaultVatMode = ReadVatMode(ReadString(settings, "DefaultVatMode", "Exclusive")),
             BlockEntryIfPaymentDue = ReadBool(settings, "BlockEntryIfPaymentDue", false)
         },
         Barcode = new BarcodeSettingsDto
@@ -227,6 +385,8 @@ public sealed class SettingsService(NetworldParkingDbContext db, ISystemActivity
             throw new InvalidOperationException("Overstay daily charge cannot be negative.");
         if (request.Rates.DefaultVatPercent is < 0 or > 100)
             throw new InvalidOperationException("Default VAT percentage must be between 0 and 100.");
+        if (!IsValidVatMode(request.Rates.DefaultVatMode))
+            throw new InvalidOperationException("Default VAT mode must be Inclusive or Exclusive.");
 
         if (string.IsNullOrWhiteSpace(request.Barcode.BarcodePrefix))
             throw new InvalidOperationException("Barcode prefix is required.");
@@ -302,7 +462,9 @@ public sealed class SettingsService(NetworldParkingDbContext db, ISystemActivity
             ["WeeklyRatePerSlot"] = Value(r.WeeklyRatePerSlot, "Default weekly company/extra slot rate per slot"),
             ["MonthlyRatePerSlot"] = Value(r.MonthlyRatePerSlot, "Default monthly company/extra slot rate per slot"),
             ["OverstayDailyCharge"] = Value(r.OverstayDailyCharge, "Charge per overstay day"),
+            ["VatEnabled"] = Value(r.VatEnabled, "Enable VAT calculation on invoices and subscriptions"),
             ["DefaultVatPercent"] = Value(r.DefaultVatPercent, "Default VAT percentage for invoice forms"),
+            ["DefaultVatMode"] = Value(ReadVatMode(r.DefaultVatMode), "Default VAT mode: Inclusive or Exclusive"),
             ["BlockEntryIfPaymentDue"] = Value(r.BlockEntryIfPaymentDue, "Blocks barcode generation when a company has pending payment"),
 
             ["BarcodePrefix"] = Value(CleanPrefix(b.BarcodePrefix, "KP"), "Barcode number prefix"),
@@ -419,6 +581,39 @@ public sealed class SettingsService(NetworldParkingDbContext db, ISystemActivity
         var clean = CleanText(value, 20, "ZPL").ToUpperInvariant();
         return clean == "ZPL" ? "ZPL" : "TSPL";
     }
+
+    private static string NormalizePeriodUnit(string? value)
+    {
+        var clean = (value ?? string.Empty).Trim();
+        if (clean.Equals("Months", StringComparison.OrdinalIgnoreCase)) return "Months";
+        if (clean.Equals("Years", StringComparison.OrdinalIgnoreCase)) return "Years";
+        return "Days";
+    }
+
+    private static bool IsValidVatMode(string? value)
+    {
+        var clean = (value ?? string.Empty).Trim();
+        return clean.Equals("Exclusive", StringComparison.OrdinalIgnoreCase) ||
+               clean.Equals("Inclusive", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ReadVatMode(string? value) =>
+        (value ?? string.Empty).Trim().Equals("Inclusive", StringComparison.OrdinalIgnoreCase) ? "Inclusive" : "Exclusive";
+
+    private static string? TrimOrNull(string? value)
+    {
+        var clean = (value ?? string.Empty).Trim();
+        return clean.Length == 0 ? null : clean;
+    }
+
+    private static ParkingRatePlanDto ToRatePlanDto(ParkingRatePlan row) =>
+        new(row.RatePlanId, row.PlanName, row.PeriodUnit, row.PeriodValue, row.RatePerSlot, row.IsSystemDefault, row.IsActive, row.SortOrder, row.Remarks);
+
+    private static ParkingVehicleTypeDto ToVehicleTypeDto(ParkingVehicleType row) =>
+        new(row.VehicleTypeId, row.VehicleTypeName, row.Description, row.IsActive, row.SortOrder);
+
+    private static ParkingBankAccountDto ToBankAccountDto(ParkingBankAccount row) =>
+        new(row.BankAccountId, row.BankName, row.AccountName, row.AccountNumber, row.Iban, row.BranchName, row.IsActive, row.SortOrder, row.Remarks);
 
     private sealed record SettingWriteValue(string Value, string Remarks);
 }
