@@ -255,6 +255,74 @@ public sealed class SettingsService(NetworldParkingDbContext db, ISystemActivity
         return ToBankAccountDto(row);
     }
 
+    public async Task<IReadOnlyList<ParkingRateVehicleTypeMappingDto>> GetRateVehicleTypeMappingsAsync(bool includeInactive = false, CancellationToken cancellationToken = default)
+    {
+        var query = db.ParkingRateVehicleTypeMappings
+            .AsNoTracking()
+            .Include(x => x.RatePlan)
+            .Include(x => x.VehicleType)
+            .AsQueryable();
+        if (!includeInactive)
+            query = query.Where(x => x.IsActive);
+
+        var rows = await query
+            .OrderBy(x => x.RatePlan == null ? string.Empty : x.RatePlan.PlanName)
+            .ThenBy(x => x.VehicleType == null ? string.Empty : x.VehicleType.VehicleTypeName)
+            .ToListAsync(cancellationToken);
+        return rows.Select(ToRateVehicleTypeMappingDto).ToList();
+    }
+
+    public async Task<ParkingRateVehicleTypeMappingDto> SaveRateVehicleTypeMappingAsync(int? mappingId, SaveParkingRateVehicleTypeMappingRequest request, int operatorId, CancellationToken cancellationToken = default)
+    {
+        if (request.RatePlanId <= 0)
+            throw new InvalidOperationException("Rate plan is required.");
+        if (request.VehicleTypeId <= 0)
+            throw new InvalidOperationException("Vehicle type is required.");
+
+        var ratePlanExists = await db.ParkingRatePlans.AnyAsync(x => x.RatePlanId == request.RatePlanId, cancellationToken);
+        if (!ratePlanExists)
+            throw new InvalidOperationException("Selected rate plan was not found.");
+        var vehicleTypeExists = await db.ParkingVehicleTypes.AnyAsync(x => x.VehicleTypeId == request.VehicleTypeId, cancellationToken);
+        if (!vehicleTypeExists)
+            throw new InvalidOperationException("Selected vehicle type was not found.");
+        if (request.RatePerSlotOverride is < 0)
+            throw new InvalidOperationException("Rate override cannot be negative.");
+
+        var duplicate = await db.ParkingRateVehicleTypeMappings.AnyAsync(x =>
+            x.RatePlanId == request.RatePlanId &&
+            x.VehicleTypeId == request.VehicleTypeId &&
+            (!mappingId.HasValue || x.RateVehicleTypeMappingId != mappingId.Value),
+            cancellationToken);
+        if (duplicate)
+            throw new InvalidOperationException("A mapping already exists for this rate plan and vehicle type.");
+
+        ParkingRateVehicleTypeMapping row;
+        if (mappingId.HasValue && mappingId.Value > 0)
+        {
+            row = await db.ParkingRateVehicleTypeMappings.FirstOrDefaultAsync(x => x.RateVehicleTypeMappingId == mappingId.Value, cancellationToken)
+                ?? throw new InvalidOperationException("Rate vehicle mapping not found.");
+            row.ModifiedBy = operatorId;
+            row.ModifiedDate = DateTime.Now;
+        }
+        else
+        {
+            row = new ParkingRateVehicleTypeMapping { CreatedBy = operatorId, CreatedDate = DateTime.Now };
+            await db.ParkingRateVehicleTypeMappings.AddAsync(row, cancellationToken);
+        }
+
+        row.RatePlanId = request.RatePlanId;
+        row.VehicleTypeId = request.VehicleTypeId;
+        row.RatePerSlotOverride = request.RatePerSlotOverride;
+        row.IsActive = request.IsActive;
+
+        await db.SaveChangesAsync(cancellationToken);
+        row = await db.ParkingRateVehicleTypeMappings
+            .Include(x => x.RatePlan)
+            .Include(x => x.VehicleType)
+            .FirstAsync(x => x.RateVehicleTypeMappingId == row.RateVehicleTypeMappingId, cancellationToken);
+        return ToRateVehicleTypeMappingDto(row);
+    }
+
     private async Task<Dictionary<string, string>> LoadSettingsDictionaryAsync(CancellationToken cancellationToken)
     {
         var rows = await db.SystemSettings
@@ -614,6 +682,16 @@ public sealed class SettingsService(NetworldParkingDbContext db, ISystemActivity
 
     private static ParkingBankAccountDto ToBankAccountDto(ParkingBankAccount row) =>
         new(row.BankAccountId, row.BankName, row.AccountName, row.AccountNumber, row.Iban, row.BranchName, row.IsActive, row.SortOrder, row.Remarks);
+
+    private static ParkingRateVehicleTypeMappingDto ToRateVehicleTypeMappingDto(ParkingRateVehicleTypeMapping row) =>
+        new(
+            row.RateVehicleTypeMappingId,
+            row.RatePlanId,
+            row.RatePlan?.PlanName ?? string.Empty,
+            row.VehicleTypeId,
+            row.VehicleType?.VehicleTypeName ?? string.Empty,
+            row.RatePerSlotOverride,
+            row.IsActive);
 
     private sealed record SettingWriteValue(string Value, string Remarks);
 }

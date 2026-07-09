@@ -12,4 +12,6 @@ public interface ISettingsService
     Task<ParkingVehicleTypeDto> SaveVehicleTypeAsync(int? vehicleTypeId, SaveParkingVehicleTypeRequest request, int operatorId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ParkingBankAccountDto>> GetBankAccountsAsync(bool includeInactive = false, CancellationToken cancellationToken = default);
     Task<ParkingBankAccountDto> SaveBankAccountAsync(int? bankAccountId, SaveParkingBankAccountRequest request, int operatorId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ParkingRateVehicleTypeMappingDto>> GetRateVehicleTypeMappingsAsync(bool includeInactive = false, CancellationToken cancellationToken = default);
+    Task<ParkingRateVehicleTypeMappingDto> SaveRateVehicleTypeMappingAsync(int? mappingId, SaveParkingRateVehicleTypeMappingRequest request, int operatorId, CancellationToken cancellationToken = default);
 }

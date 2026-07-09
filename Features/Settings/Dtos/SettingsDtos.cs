@@ -177,3 +177,20 @@ public sealed class SaveParkingBankAccountRequest
     public int SortOrder { get; set; }
     public string? Remarks { get; set; }
 }
+
+public sealed record ParkingRateVehicleTypeMappingDto(
+    int RateVehicleTypeMappingId,
+    int RatePlanId,
+    string RatePlanName,
+    int VehicleTypeId,
+    string VehicleTypeName,
+    decimal? RatePerSlotOverride,
+    bool IsActive);
+
+public sealed class SaveParkingRateVehicleTypeMappingRequest
+{
+    public int RatePlanId { get; set; }
+    public int VehicleTypeId { get; set; }
+    public decimal? RatePerSlotOverride { get; set; }
+    public bool IsActive { get; set; } = true;
+}

@@ -102,6 +102,24 @@ public sealed class SettingsController(ISettingsService service, ISystemActivity
     public async Task<ActionResult<ApiResponse<ParkingBankAccountDto>>> UpdateBankAccount(int bankAccountId, [FromBody] SaveParkingBankAccountRequest request, CancellationToken cancellationToken) =>
         await SaveBankAccount(bankAccountId, request, cancellationToken);
 
+    [RequireParkingPermission("settings", "view")]
+    [HttpGet("rate-vehicle-mappings")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<ParkingRateVehicleTypeMappingDto>>>> GetRateVehicleMappings([FromQuery] bool includeInactive, CancellationToken cancellationToken)
+    {
+        var data = await service.GetRateVehicleTypeMappingsAsync(includeInactive, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<ParkingRateVehicleTypeMappingDto>>.Ok(data));
+    }
+
+    [RequireParkingPermission("settings", "edit")]
+    [HttpPost("rate-vehicle-mappings")]
+    public async Task<ActionResult<ApiResponse<ParkingRateVehicleTypeMappingDto>>> CreateRateVehicleMapping([FromBody] SaveParkingRateVehicleTypeMappingRequest request, CancellationToken cancellationToken) =>
+        await SaveRateVehicleMapping(null, request, cancellationToken);
+
+    [RequireParkingPermission("settings", "edit")]
+    [HttpPut("rate-vehicle-mappings/{mappingId:int}")]
+    public async Task<ActionResult<ApiResponse<ParkingRateVehicleTypeMappingDto>>> UpdateRateVehicleMapping(int mappingId, [FromBody] SaveParkingRateVehicleTypeMappingRequest request, CancellationToken cancellationToken) =>
+        await SaveRateVehicleMapping(mappingId, request, cancellationToken);
+
     private int GetCurrentUserId()
     {
         var id = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
@@ -144,6 +162,19 @@ public sealed class SettingsController(ISettingsService service, ISystemActivity
         catch (InvalidOperationException ex)
         {
             return BadRequest(ApiResponse<ParkingBankAccountDto>.Fail(ex.Message));
+        }
+    }
+
+    private async Task<ActionResult<ApiResponse<ParkingRateVehicleTypeMappingDto>>> SaveRateVehicleMapping(int? mappingId, SaveParkingRateVehicleTypeMappingRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.SaveRateVehicleTypeMappingAsync(mappingId, request, GetCurrentUserId(), cancellationToken);
+            return Ok(ApiResponse<ParkingRateVehicleTypeMappingDto>.Ok(data, "Rate vehicle mapping saved."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ApiResponse<ParkingRateVehicleTypeMappingDto>.Fail(ex.Message));
         }
     }
 }
