@@ -535,6 +535,9 @@ public sealed class CreateInvoiceRequest
     [Range(0, double.MaxValue)]
     public decimal VatAmount { get; set; }
 
+    public decimal? VatPercent { get; set; }
+    public string? VatMode { get; set; }
+
     [Range(0, double.MaxValue)]
     public decimal TotalAmount { get; set; }
 
@@ -542,6 +545,7 @@ public sealed class CreateInvoiceRequest
     public decimal PaidAmount { get; set; }
 
     public string PaymentMode { get; set; } = "Cash";
+    public int? BankAccountId { get; set; }
     public string? ReferenceNo { get; set; }
     public string? Remarks { get; set; }
 

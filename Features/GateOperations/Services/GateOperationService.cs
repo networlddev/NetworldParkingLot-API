@@ -2060,10 +2060,23 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
         var invoiceType = NormalizeInvoiceType(request.InvoiceType);
         var invoiceDate = request.InvoiceDate == default ? DateTime.Now : request.InvoiceDate;
+        var settings = await repository.GetSettingsAsync(cancellationToken);
         var subTotal = Math.Max(request.SubTotal, 0);
         var discount = Math.Max(request.DiscountAmount, 0);
-        var vat = Math.Max(request.VatAmount, 0);
-        var total = request.TotalAmount > 0 ? request.TotalAmount : subTotal - discount + vat;
+        var amount = CalculateInvoiceAmountsFromSubTotal(
+            settings,
+            subTotal,
+            discount,
+            request.VatAmount,
+            request.VatPercent,
+            request.VatMode);
+        var total = amount.TotalAmount;
+        if (!request.VatPercent.HasValue && string.IsNullOrWhiteSpace(request.VatMode) && request.TotalAmount > 0)
+        {
+            var manualVat = Math.Max(request.VatAmount, 0);
+            total = request.TotalAmount;
+            amount = new InvoiceAmountSelection(subTotal, manualVat, 0, "Manual", total);
+        }
         if (total < 0)
             throw new InvalidOperationException("Invoice total cannot be negative.");
 
@@ -2084,9 +2097,11 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             DueDate = request.DueDate,
             PlanType = TrimOrNull(request.PlanType),
             Slots = Math.Max(request.Slots, 0),
-            SubTotal = subTotal,
+            SubTotal = amount.SubTotal,
             DiscountAmount = discount,
-            VatAmount = vat,
+            VatAmount = amount.VatAmount,
+            VatPercent = amount.VatPercent,
+            VatMode = amount.VatMode,
             TotalAmount = total,
             PaidAmount = paid,
             BalanceAmount = balance,
@@ -2110,7 +2125,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                 InvoiceId = invoice.InvoiceId,
                 PaymentType = "Invoice",
                 Amount = paid,
-                PaymentMode = string.IsNullOrWhiteSpace(request.PaymentMode) ? "Cash" : request.PaymentMode.Trim(),
+                PaymentMode = NormalizePaymentMode(request.PaymentMode),
+                BankAccountId = await ResolveBankAccountIdAsync(request.PaymentMode, request.BankAccountId, cancellationToken),
                 ReferenceNo = TrimOrNull(request.ReferenceNo),
                 ReceivedBy = request.OperatorId,
                 PaymentDate = DateTime.Now,
