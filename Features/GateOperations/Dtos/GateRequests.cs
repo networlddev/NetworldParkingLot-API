@@ -381,6 +381,7 @@ public sealed class RenewSubscriptionRequest
     public string? PlanType { get; set; }
     public int? RatePlanId { get; set; }
     public int? VehicleTypeId { get; set; }
+    public List<SubscriptionVehicleTypeAllocationRequest> VehicleTypeAllocations { get; set; } = [];
     public int? SlotsPurchased { get; set; }
     public DateTime? StartDate { get; set; }
     public DateTime? EndDate { get; set; }

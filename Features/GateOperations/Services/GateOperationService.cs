@@ -728,7 +728,16 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         var endDate = request.EndDate.HasValue && request.EndDate.Value.Date > startDate
             ? request.EndDate.Value.Date
             : CalculateSubscriptionEndDate(renewalRatePlan, planType, startDate);
-        var slots = request.SlotsPurchased.HasValue && request.SlotsPurchased.Value > 0 ? request.SlotsPurchased.Value : existing.SlotsPurchased;
+        var renewalAllocations = request.VehicleTypeAllocations.Count > 0
+            ? request.VehicleTypeAllocations
+            : request.SlotsPurchased.HasValue
+                ? []
+                : await GetSubscriptionAllocationRequestsAsync(existing.SubscriptionId, cancellationToken);
+        var slots = renewalAllocations.Count > 0
+            ? renewalAllocations.Sum(x => x.SlotsPurchased)
+            : request.SlotsPurchased.HasValue && request.SlotsPurchased.Value > 0
+                ? request.SlotsPurchased.Value
+                : existing.SlotsPurchased;
         var ratePerSlot = request.RatePerSlot.HasValue && request.RatePerSlot.Value > 0 ? request.RatePerSlot.Value : existing.RatePerSlot;
 
         await EnsureRegularSubscriptionDoesNotOverlapAsync(
@@ -746,6 +755,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             PlanType = planType,
             RatePlanId = renewalRatePlanId,
             VehicleTypeId = request.VehicleTypeId ?? existing.VehicleTypeId,
+            VehicleTypeAllocations = renewalAllocations,
             SlotsPurchased = slots,
             IsExtraSlot = existing.IsExtraSlot,
             StartDate = startDate,
@@ -3030,6 +3040,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                     : null;
                 var latestPricing = new PricingSelection(latest.PlanType, latest.RatePlanId, latestRatePlan, latest.VehicleTypeId, latest.RatePerSlot);
                 var nextEnd = CalculateSubscriptionEndDate(latestRatePlan, latest.PlanType, nextStart);
+                var latestAllocations = await GetSubscriptionAllocationRequestsAsync(latest.SubscriptionId, cancellationToken);
                 var exists = await db.ParkingSubscriptions.AnyAsync(x =>
                     x.CompanyId == company.CompanyId &&
                     !x.IsExtraSlot &&
@@ -3044,7 +3055,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                     company,
                     latestPricing,
                     latest.SlotsPurchased,
-                    null,
+                    latestAllocations,
                     nextStart,
                     nextEnd,
                     latest.DiscountAmount,
@@ -4385,6 +4396,21 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         var singleVehicleTypeId = lines.Count == 1 ? lines[0].VehicleTypeId : (int?)null;
         var representativeRate = totalSlots > 0 ? Math.Round(subTotal / totalSlots, 2, MidpointRounding.AwayFromZero) : pricing.RatePerSlot;
         return new AllocationSelection(lines, totalSlots, subTotal, singleVehicleTypeId, representativeRate);
+    }
+
+    private async Task<List<SubscriptionVehicleTypeAllocationRequest>> GetSubscriptionAllocationRequestsAsync(int subscriptionId, CancellationToken cancellationToken)
+    {
+        return await db.ParkingSubscriptionVehicleAllocations
+            .AsNoTracking()
+            .Where(x => x.SubscriptionId == subscriptionId)
+            .OrderBy(x => x.SubscriptionVehicleAllocationId)
+            .Select(x => new SubscriptionVehicleTypeAllocationRequest
+            {
+                VehicleTypeId = x.VehicleTypeId,
+                SlotsPurchased = x.SlotsPurchased,
+                RatePerSlot = x.RatePerSlot
+            })
+            .ToListAsync(cancellationToken);
     }
 
     private async Task SaveVehicleAllocationsAsync(int subscriptionId, AllocationSelection allocations, int operatorId, CancellationToken cancellationToken)
