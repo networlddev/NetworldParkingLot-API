@@ -4580,7 +4580,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         {
             "Weekly" => startDate.AddDays(6),
             "Monthly" => startDate.AddMonths(1).AddDays(-1),
-            _ => startDate.AddDays(1)
+            _ => startDate
         };
 
     private static string GetInvoiceStatus(decimal balance, decimal paid) =>
