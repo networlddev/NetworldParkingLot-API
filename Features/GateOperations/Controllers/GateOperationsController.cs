@@ -284,6 +284,22 @@ public sealed class GateOperationsController(IGateOperationService service, ISys
         }
     }
 
+    [RequireParkingPermission("subscriptions", "edit")]
+    [HttpPost("subscriptions/{subscriptionId:int}/clear-cancelled-balance")]
+    public async Task<ActionResult<ApiResponse<SubscriptionListItemDto>>> ClearCancelledSubscriptionBalance(int subscriptionId, [FromBody] ClearCancelledSubscriptionBalanceRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var data = await service.ClearCancelledSubscriptionBalanceAsync(subscriptionId, StampOperator(request), cancellationToken);
+            return Ok(ApiResponse<SubscriptionListItemDto>.Ok(data, "Cancelled subscription balance cleared."));
+        }
+        catch (InvalidOperationException ex)
+        {
+            await RecordSubscriptionFailureAsync("clear-cancelled-balance", "ParkingSubscription", subscriptionId.ToString(), "Clear cancelled subscription balance failed", ex.Message, cancellationToken);
+            return BadRequest(ApiResponse<SubscriptionListItemDto>.Fail(ex.Message));
+        }
+    }
+
     [RequireParkingPermission("subscriptions", "create")]
     [HttpPost("subscriptions/{subscriptionId:int}/renew")]
     public async Task<ActionResult<ApiResponse<SubscriptionListItemDto>>> RenewSubscription(int subscriptionId, [FromBody] RenewSubscriptionRequest request, CancellationToken cancellationToken)

@@ -324,6 +324,15 @@ public sealed class CancelSubscriptionRequest
 {
     public string? Reason { get; set; }
     public bool ClearPendingInvoiceBalance { get; set; }
+    public bool StopAutoRenew { get; set; }
+
+    public int OperatorId { get; set; }
+}
+
+public sealed class ClearCancelledSubscriptionBalanceRequest
+{
+    [Required]
+    public string Reason { get; set; } = string.Empty;
 
     public int OperatorId { get; set; }
 }
@@ -352,7 +361,6 @@ public sealed class ReduceSubscriptionSlotsRequest
     public int NewSlotsPurchased { get; set; }
 
     public DateTime? EffectiveDate { get; set; }
-    public bool ApplyCreditToOpenInvoices { get; set; } = true;
     public string? Reason { get; set; }
     public int OperatorId { get; set; }
 }

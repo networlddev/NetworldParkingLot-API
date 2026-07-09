@@ -563,11 +563,21 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
         var oldStatus = subscription.Status;
         var oldBalanceAmount = subscription.BalanceAmount;
+        var oldAutoRenew = subscription.AutoRenew;
+        var oldStopReason = subscription.StopReason;
 
         subscription.Status = ParkingConstants.SubscriptionStatus.Cancelled;
         subscription.CancelledBy = request.OperatorId;
         subscription.CancelledDate = DateTime.Now;
         subscription.CancellationReason = TrimOrNull(request.Reason);
+        if (request.StopAutoRenew)
+        {
+            await StopCompanyRegularAutoRenewalChainAsync(
+                subscription.CompanyId,
+                request.OperatorId,
+                TrimOrNull(request.Reason) ?? "Auto-renew stopped during subscription cancellation.",
+                cancellationToken);
+        }
         subscription.ModifiedBy = request.OperatorId;
         subscription.ModifiedDate = DateTime.Now;
 
@@ -586,6 +596,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         {
             new("Status", oldStatus, subscription.Status),
             new("BalanceAmount", AuditValue(oldBalanceAmount), AuditValue(subscription.BalanceAmount)),
+            new("AutoRenew", AuditValue(oldAutoRenew), AuditValue(subscription.AutoRenew)),
+            new("StopReason", oldStopReason, subscription.StopReason),
             new("CancellationReason", null, subscription.CancellationReason)
         };
         if (invoice != null)
@@ -595,6 +607,90 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         }
 
         await AddActivityAsync("SubscriptionCancelled", subscription.CompanyId, null, null, null, "Subscription Cancelled", request.Reason, request.OperatorId, cancellationToken, changes, "ParkingSubscription", subscription.SubscriptionId.ToString());
+        await db.SaveChangesAsync(cancellationToken);
+        return await GetSubscriptionByIdAsync(subscription.SubscriptionId, cancellationToken);
+    }
+
+    private async Task StopCompanyRegularAutoRenewalChainAsync(int companyId, int operatorId, string reason, CancellationToken cancellationToken)
+    {
+        var company = await db.ParkingCompanies.FirstOrDefaultAsync(x => x.CompanyId == companyId, cancellationToken)
+            ?? throw new InvalidOperationException("Company not found.");
+
+        company.AutoRenewSubscriptions = false;
+        company.ModifiedBy = operatorId == 0 ? company.ModifiedBy : operatorId;
+        company.ModifiedDate = DateTime.Now;
+
+        var subscriptions = await db.ParkingSubscriptions
+            .Where(x => x.CompanyId == companyId && !x.IsExtraSlot && x.AutoRenew)
+            .ToListAsync(cancellationToken);
+
+        foreach (var item in subscriptions)
+        {
+            item.AutoRenew = false;
+            item.StoppedBy = operatorId == 0 ? item.StoppedBy : operatorId;
+            item.StoppedDate = DateTime.Now;
+            item.StopReason = reason;
+            item.ModifiedBy = operatorId == 0 ? item.ModifiedBy : operatorId;
+            item.ModifiedDate = DateTime.Now;
+        }
+    }
+
+    public async Task<SubscriptionListItemDto> ClearCancelledSubscriptionBalanceAsync(int subscriptionId, ClearCancelledSubscriptionBalanceRequest request, CancellationToken cancellationToken = default)
+    {
+        var reason = TrimOrNull(request.Reason);
+        if (reason == null)
+            throw new InvalidOperationException("Reason is required to clear cancelled subscription balance.");
+
+        var subscription = await db.ParkingSubscriptions.FirstOrDefaultAsync(x => x.SubscriptionId == subscriptionId, cancellationToken)
+            ?? throw new InvalidOperationException("Subscription not found.");
+
+        if (!subscription.Status.Equals(ParkingConstants.SubscriptionStatus.Cancelled, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Only cancelled subscription balances can be cleared with this action.");
+
+        var invoice = await GetSubscriptionInvoiceForUpdateAsync(subscription.SubscriptionId, cancellationToken)
+            ?? throw new InvalidOperationException("Subscription invoice not found.");
+
+        if (invoice.Status.Equals("Cancelled", StringComparison.OrdinalIgnoreCase) && invoice.BalanceAmount <= 0 && subscription.BalanceAmount <= 0)
+            throw new InvalidOperationException("Cancelled subscription balance is already clear.");
+
+        if (invoice.BalanceAmount <= 0 && subscription.BalanceAmount <= 0)
+            throw new InvalidOperationException("This cancelled subscription has no unpaid balance to clear.");
+
+        var oldSubscriptionBalance = subscription.BalanceAmount;
+        var oldInvoiceBalance = invoice.BalanceAmount;
+        var oldInvoiceStatus = invoice.Status;
+
+        subscription.BalanceAmount = 0;
+        subscription.ModifiedBy = request.OperatorId;
+        subscription.ModifiedDate = DateTime.Now;
+        subscription.Remarks = AppendRemarks(subscription.Remarks, $"Cancelled balance cleared: {reason}");
+
+        invoice.BalanceAmount = 0;
+        invoice.Status = "Cancelled";
+        invoice.ModifiedBy = request.OperatorId;
+        invoice.ModifiedDate = DateTime.Now;
+        invoice.Remarks = AppendRemarks(invoice.Remarks, $"Cancelled subscription unpaid balance cleared: {reason}");
+
+        await AddActivityAsync(
+            "CancelledSubscriptionBalanceCleared",
+            subscription.CompanyId,
+            null,
+            null,
+            null,
+            "Cancelled Subscription Balance Cleared",
+            reason,
+            request.OperatorId,
+            cancellationToken,
+            new List<SystemActivityChange>
+            {
+                new("BalanceAmount", AuditValue(oldSubscriptionBalance), AuditValue(subscription.BalanceAmount)),
+                new("InvoiceBalanceAmount", AuditValue(oldInvoiceBalance), AuditValue(invoice.BalanceAmount)),
+                new("InvoiceStatus", oldInvoiceStatus, invoice.Status),
+                new("Reason", null, reason)
+            },
+            "ParkingSubscription",
+            subscription.SubscriptionId.ToString());
+
         await db.SaveChangesAsync(cancellationToken);
         return await GetSubscriptionByIdAsync(subscription.SubscriptionId, cancellationToken);
     }
@@ -708,18 +804,6 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         };
         await db.ParkingCompanyBalanceAdjustments.AddAsync(adjustment, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
-
-        if (request.ApplyCreditToOpenInvoices && adjustment.RemainingAmount > 0)
-        {
-            var openInvoices = await db.ParkingInvoices
-                .Where(x => x.CompanyId == subscription.CompanyId && x.BalanceAmount > 0 && x.Status != "Cancelled")
-                .OrderBy(x => x.InvoiceDate)
-                .ThenBy(x => x.InvoiceId)
-                .ToListAsync(cancellationToken);
-
-            foreach (var invoice in openInvoices)
-                await ApplyCustomerCreditToInvoiceAsync(invoice, cancellationToken);
-        }
 
         await AddActivityAsync(
             "SubscriptionSlotsReduced",
