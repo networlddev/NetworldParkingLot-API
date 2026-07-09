@@ -131,11 +131,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
         ValidateCompanyContact(request.Mobile, request.Email);
 
-        var planType = NormalizeExtraSlotPlanType(request.PlanType);
         var settings = await repository.GetSettingsAsync(cancellationToken);
-        var ratePerSlot = ResolveRatePerSlot(settings, planType, request.RatePerSlot);
-        if (ratePerSlot <= 0)
-            throw new InvalidOperationException($"{planType} subscription rate is not configured. Please update settings first.");
+        var pricing = await ResolvePricingAsync(settings, request.PlanType, request.RatePlanId, request.VehicleTypeId, request.RatePerSlot, cancellationToken);
 
         var companyCode = (request.CompanyCode ?? string.Empty).Trim().ToUpperInvariant();
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
@@ -152,14 +149,11 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             throw new InvalidOperationException($"Company name {companyName} already exists.");
 
         var startDate = request.StartDate == default ? DateTime.Today : request.StartDate.Date;
-        var endDate = CalculateExtraSlotEndDate(planType, startDate);
-        var subTotal = request.SlotsPurchased * ratePerSlot;
-        var total = subTotal - request.DiscountAmount + request.VatAmount;
-        if (total < 0)
-            throw new InvalidOperationException("Invoice total cannot be negative.");
+        var endDate = CalculateSubscriptionEndDate(pricing.RatePlan, pricing.PlanType, startDate);
+        var amount = CalculateInvoiceAmounts(settings, request.SlotsPurchased, pricing.RatePerSlot, request.DiscountAmount, request.VatAmount, request.VatPercent, request.VatMode);
 
-        var paid = ValidateInitialPaidAmount(request.PaidAmount, total);
-        var balance = total - paid;
+        var paid = ValidateInitialPaidAmount(request.PaidAmount, amount.TotalAmount);
+        var balance = amount.TotalAmount - paid;
 
         var company = new ParkingCompany
         {
@@ -189,14 +183,18 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         var subscription = new ParkingSubscription
         {
             CompanyId = company.CompanyId,
-            PlanType = planType,
+            PlanType = pricing.PlanType,
+            RatePlanId = pricing.RatePlanId,
+            VehicleTypeId = pricing.VehicleTypeId,
             SlotsPurchased = request.SlotsPurchased,
-            RatePerSlot = ratePerSlot,
+            RatePerSlot = pricing.RatePerSlot,
             StartDate = startDate,
             EndDate = endDate,
             DiscountAmount = request.DiscountAmount,
-            VatAmount = request.VatAmount,
-            TotalAmount = total,
+            VatAmount = amount.VatAmount,
+            VatPercent = amount.VatPercent,
+            VatMode = amount.VatMode,
+            TotalAmount = amount.TotalAmount,
             PaidAmount = paid,
             BalanceAmount = balance,
             Status = ParkingConstants.SubscriptionStatus.Active,
@@ -218,16 +216,20 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             InvoiceType = "Subscription",
             InvoiceDate = DateTime.Now,
             DueDate = endDate,
-            PlanType = planType,
+            PlanType = pricing.PlanType,
+            RatePlanId = pricing.RatePlanId,
+            VehicleTypeId = pricing.VehicleTypeId,
             Slots = request.SlotsPurchased,
-            SubTotal = subTotal,
+            SubTotal = amount.SubTotal,
             DiscountAmount = request.DiscountAmount,
-            VatAmount = request.VatAmount,
-            TotalAmount = total,
+            VatAmount = amount.VatAmount,
+            VatPercent = amount.VatPercent,
+            VatMode = amount.VatMode,
+            TotalAmount = amount.TotalAmount,
             PaidAmount = paid,
             BalanceAmount = balance,
             Status = GetInvoiceStatus(balance, paid),
-            Remarks = $"Initial {planType} subscription created with company.",
+            Remarks = $"Initial {pricing.PlanType} subscription created with company.",
             CreatedBy = request.OperatorId,
             CreatedDate = DateTime.Now
         };
@@ -250,6 +252,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                 PaymentType = "Subscription",
                 Amount = paid,
                 PaymentMode = NormalizePaymentMode(request.PaymentMode),
+                BankAccountId = await ResolveBankAccountIdAsync(request.PaymentMode, request.BankAccountId, cancellationToken),
                 ReferenceNo = TrimOrNull(request.ReferenceNo),
                 ReceivedBy = request.OperatorId,
                 PaymentDate = DateTime.Now,
@@ -257,7 +260,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             }, cancellationToken);
         }
 
-        await AddActivityAsync("CompanyCreated", company.CompanyId, null, null, null, "Company Created", $"Company {company.CompanyName} created with {planType} subscription.", request.OperatorId, cancellationToken);
+        await AddActivityAsync("CompanyCreated", company.CompanyId, null, null, null, "Company Created", $"Company {company.CompanyName} created with {pricing.PlanType} subscription.", request.OperatorId, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
@@ -362,10 +365,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             throw new InvalidOperationException("Cannot create subscription for inactive or blocked company.");
 
         var settings = await repository.GetSettingsAsync(cancellationToken);
-        var planType = NormalizeExtraSlotPlanType(request.PlanType);
-        var ratePerSlot = ResolveRatePerSlot(settings, planType, request.RatePerSlot);
-        if (ratePerSlot <= 0)
-            throw new InvalidOperationException($"{planType} subscription rate is not configured. Please update settings first.");
+        var pricing = await ResolvePricingAsync(settings, request.PlanType, request.RatePlanId, request.VehicleTypeId, request.RatePerSlot, cancellationToken);
 
         if (request.SlotsPurchased <= 0)
             throw new InvalidOperationException("Slots purchased must be greater than zero.");
@@ -373,7 +373,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         var startDate = request.StartDate == default ? DateTime.Today : request.StartDate.Date;
         var endDate = request.EndDate.HasValue && request.EndDate.Value.Date > startDate
             ? request.EndDate.Value.Date
-            : CalculateExtraSlotEndDate(planType, startDate);
+            : CalculateSubscriptionEndDate(pricing.RatePlan, pricing.PlanType, startDate);
 
         await EnsureRegularSubscriptionDoesNotOverlapAsync(
             company.CompanyId,
@@ -387,15 +387,17 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         var subscription = await CreateSubscriptionInvoiceInternalAsync(
             company,
-            planType,
+            pricing,
             request.SlotsPurchased,
-            ratePerSlot,
             startDate,
             endDate,
             request.DiscountAmount,
             request.VatAmount,
+            request.VatPercent,
+            request.VatMode,
             request.PaidAmount,
             request.PaymentMode,
+            request.BankAccountId,
             request.ReferenceNo,
             request.Remarks,
             request.IsExtraSlot,
@@ -411,7 +413,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             null,
             null,
             request.IsExtraSlot ? "Extra Slot Subscription" : "Subscription Created",
-            $"{planType} subscription created with {request.SlotsPurchased} slot(s).",
+            $"{pricing.PlanType} subscription created with {request.SlotsPurchased} slot(s).",
             request.OperatorId,
             cancellationToken);
 
@@ -436,10 +438,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
         var invoice = await GetSubscriptionInvoiceForUpdateAsync(subscription.SubscriptionId, cancellationToken);
         var settings = await repository.GetSettingsAsync(cancellationToken);
-        var planType = NormalizeExtraSlotPlanType(request.PlanType);
-        var ratePerSlot = ResolveRatePerSlot(settings, planType, request.RatePerSlot);
-        if (ratePerSlot <= 0)
-            throw new InvalidOperationException($"{planType} subscription rate is not configured. Please update settings first.");
+        var pricing = await ResolvePricingAsync(settings, request.PlanType, request.RatePlanId, request.VehicleTypeId, request.RatePerSlot, cancellationToken);
 
         if (request.SlotsPurchased <= 0)
             throw new InvalidOperationException("Slots purchased must be greater than zero.");
@@ -447,7 +446,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         var startDate = request.StartDate == default ? subscription.StartDate.Date : request.StartDate.Date;
         var endDate = request.EndDate.HasValue && request.EndDate.Value.Date > startDate
             ? request.EndDate.Value.Date
-            : CalculateExtraSlotEndDate(planType, startDate);
+            : CalculateSubscriptionEndDate(pricing.RatePlan, pricing.PlanType, startDate);
         var normalizedStatus = NormalizeSubscriptionStatus(request.Status, startDate, endDate);
         if (normalizedStatus == ParkingConstants.SubscriptionStatus.Inactive)
         {
@@ -455,14 +454,11 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             if (companyVehiclesInside)
                 throw new InvalidOperationException("Cannot mark subscription inactive while company vehicles are still inside.");
         }
-        var subTotal = request.SlotsPurchased * ratePerSlot;
-        var total = subTotal - request.DiscountAmount + request.VatAmount;
-        if (total < 0)
-            throw new InvalidOperationException("Invoice total cannot be negative.");
+        var amount = CalculateInvoiceAmounts(settings, request.SlotsPurchased, pricing.RatePerSlot, request.DiscountAmount, request.VatAmount, request.VatPercent, request.VatMode);
 
         var paid = invoice?.PaidAmount ?? subscription.PaidAmount;
-        if (paid > total)
-            throw new InvalidOperationException($"New total AED {total:n2} cannot be less than already paid AED {paid:n2}.");
+        if (paid > amount.TotalAmount)
+            throw new InvalidOperationException($"New total AED {amount.TotalAmount:n2} cannot be less than already paid AED {paid:n2}.");
 
         await EnsureRegularSubscriptionDoesNotOverlapAsync(
             subscription.CompanyId,
@@ -483,15 +479,19 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
         var changes = new List<SystemActivityChange>
         {
-            new("PlanType", subscription.PlanType, planType),
+            new("PlanType", subscription.PlanType, pricing.PlanType),
+            new("RatePlanId", AuditValue(subscription.RatePlanId), AuditValue(pricing.RatePlanId)),
+            new("VehicleTypeId", AuditValue(subscription.VehicleTypeId), AuditValue(pricing.VehicleTypeId)),
             new("SlotsPurchased", AuditValue(subscription.SlotsPurchased), AuditValue(request.SlotsPurchased)),
-            new("RatePerSlot", AuditValue(subscription.RatePerSlot), AuditValue(ratePerSlot)),
+            new("RatePerSlot", AuditValue(subscription.RatePerSlot), AuditValue(pricing.RatePerSlot)),
             new("StartDate", AuditValue(subscription.StartDate), AuditValue(startDate)),
             new("EndDate", AuditValue(subscription.EndDate), AuditValue(endDate)),
             new("DiscountAmount", AuditValue(subscription.DiscountAmount), AuditValue(request.DiscountAmount)),
-            new("VatAmount", AuditValue(subscription.VatAmount), AuditValue(request.VatAmount)),
-            new("TotalAmount", AuditValue(subscription.TotalAmount), AuditValue(total)),
-            new("BalanceAmount", AuditValue(subscription.BalanceAmount), AuditValue(total - paid)),
+            new("VatAmount", AuditValue(subscription.VatAmount), AuditValue(amount.VatAmount)),
+            new("VatPercent", AuditValue(subscription.VatPercent), AuditValue(amount.VatPercent)),
+            new("VatMode", subscription.VatMode, amount.VatMode),
+            new("TotalAmount", AuditValue(subscription.TotalAmount), AuditValue(amount.TotalAmount)),
+            new("BalanceAmount", AuditValue(subscription.BalanceAmount), AuditValue(amount.TotalAmount - paid)),
             new("IsExtraSlot", AuditValue(subscription.IsExtraSlot), AuditValue(request.IsExtraSlot)),
             new("AutoRenew", AuditValue(subscription.AutoRenew), AuditValue(request.AutoRenew)),
             new("Status", subscription.Status, normalizedStatus),
@@ -502,20 +502,24 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (invoice != null)
         {
             changes.Add(new("InvoiceType", invoice.InvoiceType, request.IsExtraSlot ? "ExtraSlot" : "Subscription"));
-            changes.Add(new("InvoiceBalanceAmount", AuditValue(invoice.BalanceAmount), AuditValue(total - paid)));
-            changes.Add(new("InvoiceStatus", invoice.Status, GetInvoiceStatus(total - paid, paid)));
+            changes.Add(new("InvoiceBalanceAmount", AuditValue(invoice.BalanceAmount), AuditValue(amount.TotalAmount - paid)));
+            changes.Add(new("InvoiceStatus", invoice.Status, GetInvoiceStatus(amount.TotalAmount - paid, paid)));
         }
 
-        subscription.PlanType = planType;
+        subscription.PlanType = pricing.PlanType;
+        subscription.RatePlanId = pricing.RatePlanId;
+        subscription.VehicleTypeId = pricing.VehicleTypeId;
         subscription.SlotsPurchased = request.SlotsPurchased;
-        subscription.RatePerSlot = ratePerSlot;
+        subscription.RatePerSlot = pricing.RatePerSlot;
         subscription.StartDate = startDate;
         subscription.EndDate = endDate;
         subscription.DiscountAmount = request.DiscountAmount;
-        subscription.VatAmount = request.VatAmount;
-        subscription.TotalAmount = total;
+        subscription.VatAmount = amount.VatAmount;
+        subscription.VatPercent = amount.VatPercent;
+        subscription.VatMode = amount.VatMode;
+        subscription.TotalAmount = amount.TotalAmount;
         subscription.PaidAmount = paid;
-        subscription.BalanceAmount = total - paid;
+        subscription.BalanceAmount = amount.TotalAmount - paid;
         subscription.IsExtraSlot = request.IsExtraSlot;
         subscription.AutoRenew = normalizedStatus == ParkingConstants.SubscriptionStatus.Inactive ? false : request.AutoRenew;
         subscription.Status = normalizedStatus;
@@ -533,14 +537,18 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         {
             invoice.InvoiceType = request.IsExtraSlot ? "ExtraSlot" : "Subscription";
             invoice.DueDate = endDate;
-            invoice.PlanType = planType;
+            invoice.PlanType = pricing.PlanType;
+            invoice.RatePlanId = pricing.RatePlanId;
+            invoice.VehicleTypeId = pricing.VehicleTypeId;
             invoice.Slots = request.SlotsPurchased;
-            invoice.SubTotal = subTotal;
+            invoice.SubTotal = amount.SubTotal;
             invoice.DiscountAmount = request.DiscountAmount;
-            invoice.VatAmount = request.VatAmount;
-            invoice.TotalAmount = total;
+            invoice.VatAmount = amount.VatAmount;
+            invoice.VatPercent = amount.VatPercent;
+            invoice.VatMode = amount.VatMode;
+            invoice.TotalAmount = amount.TotalAmount;
             invoice.PaidAmount = paid;
-            invoice.BalanceAmount = total - paid;
+            invoice.BalanceAmount = amount.TotalAmount - paid;
             invoice.Status = GetInvoiceStatus(invoice.BalanceAmount, invoice.PaidAmount);
             invoice.Remarks = TrimOrNull(request.Remarks);
         }
@@ -702,11 +710,15 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             .FirstOrDefaultAsync(x => x.SubscriptionId == subscriptionId, cancellationToken)
             ?? throw new InvalidOperationException("Subscription not found.");
 
-        var planType = NormalizeExtraSlotPlanType(string.IsNullOrWhiteSpace(request.PlanType) ? existing.PlanType : request.PlanType);
+        var planType = string.IsNullOrWhiteSpace(request.PlanType) ? existing.PlanType : request.PlanType;
+        var renewalRatePlanId = request.RatePlanId ?? existing.RatePlanId;
+        var renewalRatePlan = renewalRatePlanId.HasValue
+            ? await db.ParkingRatePlans.AsNoTracking().FirstOrDefaultAsync(x => x.RatePlanId == renewalRatePlanId.Value, cancellationToken)
+            : null;
         var startDate = request.StartDate?.Date ?? (existing.EndDate.Date >= DateTime.Today ? existing.EndDate.Date.AddDays(1) : DateTime.Today);
         var endDate = request.EndDate.HasValue && request.EndDate.Value.Date > startDate
             ? request.EndDate.Value.Date
-            : CalculateExtraSlotEndDate(planType, startDate);
+            : CalculateSubscriptionEndDate(renewalRatePlan, planType, startDate);
         var slots = request.SlotsPurchased.HasValue && request.SlotsPurchased.Value > 0 ? request.SlotsPurchased.Value : existing.SlotsPurchased;
         var ratePerSlot = request.RatePerSlot.HasValue && request.RatePerSlot.Value > 0 ? request.RatePerSlot.Value : existing.RatePerSlot;
 
@@ -723,6 +735,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         {
             CompanyId = existing.CompanyId,
             PlanType = planType,
+            RatePlanId = renewalRatePlanId,
+            VehicleTypeId = request.VehicleTypeId ?? existing.VehicleTypeId,
             SlotsPurchased = slots,
             IsExtraSlot = existing.IsExtraSlot,
             StartDate = startDate,
@@ -731,8 +745,11 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             AutoRenew = request.AutoRenew ?? existing.AutoRenew,
             DiscountAmount = request.DiscountAmount,
             VatAmount = request.VatAmount,
+            VatPercent = request.VatPercent,
+            VatMode = request.VatMode,
             PaidAmount = request.PaidAmount,
             PaymentMode = request.PaymentMode,
+            BankAccountId = request.BankAccountId,
             ReferenceNo = request.ReferenceNo,
             Remarks = string.IsNullOrWhiteSpace(request.Remarks) ? $"Renewal of subscription #{existing.SubscriptionId}" : request.Remarks,
             OperatorId = request.OperatorId
@@ -838,15 +855,17 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
     private async Task<ParkingSubscription> CreateSubscriptionInvoiceInternalAsync(
         ParkingCompany company,
-        string planType,
+        PricingSelection pricing,
         int slotsPurchased,
-        decimal ratePerSlot,
         DateTime startDate,
         DateTime endDate,
         decimal discountAmount,
         decimal vatAmount,
+        decimal? vatPercent,
+        string? vatMode,
         decimal paidAmount,
         string paymentMode,
+        int? bankAccountId,
         string? referenceNo,
         string? remarks,
         bool isExtraSlot,
@@ -855,26 +874,28 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         string invoiceType,
         CancellationToken cancellationToken)
     {
-        var subTotal = slotsPurchased * ratePerSlot;
-        var total = subTotal - discountAmount + vatAmount;
-        if (total < 0)
-            throw new InvalidOperationException("Invoice total cannot be negative.");
+        var settings = await repository.GetSettingsAsync(cancellationToken);
+        var amount = CalculateInvoiceAmounts(settings, slotsPurchased, pricing.RatePerSlot, discountAmount, vatAmount, vatPercent, vatMode);
 
-        var paid = ValidateInitialPaidAmount(paidAmount, total);
-        var balance = total - paid;
+        var paid = ValidateInitialPaidAmount(paidAmount, amount.TotalAmount);
+        var balance = amount.TotalAmount - paid;
         var invoiceNo = await GenerateNextInvoiceNoAsync(cancellationToken);
 
         var subscription = new ParkingSubscription
         {
             CompanyId = company.CompanyId,
-            PlanType = planType,
+            PlanType = pricing.PlanType,
+            RatePlanId = pricing.RatePlanId,
+            VehicleTypeId = pricing.VehicleTypeId,
             SlotsPurchased = slotsPurchased,
-            RatePerSlot = ratePerSlot,
+            RatePerSlot = pricing.RatePerSlot,
             StartDate = startDate,
             EndDate = endDate,
             DiscountAmount = discountAmount,
-            VatAmount = vatAmount,
-            TotalAmount = total,
+            VatAmount = amount.VatAmount,
+            VatPercent = amount.VatPercent,
+            VatMode = amount.VatMode,
+            TotalAmount = amount.TotalAmount,
             PaidAmount = paid,
             BalanceAmount = balance,
             Status = ParkingConstants.SubscriptionStatus.Active,
@@ -895,12 +916,16 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             InvoiceType = invoiceType,
             InvoiceDate = DateTime.Now,
             DueDate = endDate,
-            PlanType = planType,
+            PlanType = pricing.PlanType,
+            RatePlanId = pricing.RatePlanId,
+            VehicleTypeId = pricing.VehicleTypeId,
             Slots = slotsPurchased,
-            SubTotal = subTotal,
+            SubTotal = amount.SubTotal,
             DiscountAmount = discountAmount,
-            VatAmount = vatAmount,
-            TotalAmount = total,
+            VatAmount = amount.VatAmount,
+            VatPercent = amount.VatPercent,
+            VatMode = amount.VatMode,
+            TotalAmount = amount.TotalAmount,
             PaidAmount = paid,
             BalanceAmount = balance,
             Status = GetInvoiceStatus(balance, paid),
@@ -927,6 +952,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                 PaymentType = invoiceType,
                 Amount = paid,
                 PaymentMode = string.IsNullOrWhiteSpace(paymentMode) ? "Cash" : paymentMode.Trim(),
+                BankAccountId = await ResolveBankAccountIdAsync(paymentMode, bankAccountId, cancellationToken),
                 ReferenceNo = referenceNo,
                 ReceivedBy = operatorId,
                 PaymentDate = DateTime.Now,
@@ -1500,6 +1526,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
     {
         var amount = ValidatePositivePaymentAmount(request.Amount);
         var paymentMode = NormalizePaymentMode(request.PaymentMode);
+        var bankAccountId = await ResolveBankAccountIdAsync(paymentMode, request.BankAccountId, cancellationToken);
         var company = await repository.GetCompanyAsync(request.CompanyId, cancellationToken)
             ?? throw new InvalidOperationException("Company not found.");
 
@@ -1570,6 +1597,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                 PaymentType = request.SessionId.HasValue ? "GateCollection" : "Invoice",
                 Amount = allocation.Amount,
                 PaymentMode = paymentMode,
+                BankAccountId = bankAccountId,
                 ReferenceNo = TrimOrNull(request.ReferenceNo),
                 ReceivedBy = request.OperatorId,
                 PaymentDate = DateTime.Now,
@@ -1589,6 +1617,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             new("ReceiptNo", null, receiptSummary),
             new("Amount", null, AuditValue(amount)),
             new("PaymentMode", null, primaryPayment.PaymentMode),
+            new("BankAccountId", null, AuditValue(primaryPayment.BankAccountId)),
             new("ReferenceNo", null, primaryPayment.ReferenceNo),
             new("CurrentPendingAmount", AuditValue(currentPending), null),
             new("AppliedInvoices", null, BuildPaymentAllocationSummary(allocations))
@@ -1700,36 +1729,34 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             ?? throw new InvalidOperationException("Company not found.");
 
         var settings = await repository.GetSettingsAsync(cancellationToken);
-        var planType = NormalizeExtraSlotPlanType(request.PlanType);
-        var ratePerSlot = ResolveRatePerSlot(settings, planType, request.RatePerSlot);
-        if (ratePerSlot <= 0)
-            throw new InvalidOperationException($"{planType} extra slot rate is not configured. Please update rate settings first.");
+        var pricing = await ResolvePricingAsync(settings, request.PlanType, request.RatePlanId, request.VehicleTypeId, request.RatePerSlot, cancellationToken);
 
         var startDate = request.StartDate == default ? DateTime.Today : request.StartDate.Date;
-        var endDate = CalculateExtraSlotEndDate(planType, startDate);
+        var endDate = CalculateSubscriptionEndDate(pricing.RatePlan, pricing.PlanType, startDate);
 
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
 
-        var subTotal = request.AdditionalSlots * ratePerSlot;
-        var total = subTotal - request.DiscountAmount + request.VatAmount;
-        if (total < 0)
-            throw new InvalidOperationException("Invoice total cannot be negative.");
+        var amount = CalculateInvoiceAmounts(settings, request.AdditionalSlots, pricing.RatePerSlot, request.DiscountAmount, request.VatAmount, request.VatPercent, request.VatMode);
 
-        var paid = ValidateInitialPaidAmount(request.PaidAmount, total);
-        var balance = total - paid;
+        var paid = ValidateInitialPaidAmount(request.PaidAmount, amount.TotalAmount);
+        var balance = amount.TotalAmount - paid;
         var invoiceNo = await GenerateNextInvoiceNoAsync(cancellationToken);
 
         var subscription = new ParkingSubscription
         {
             CompanyId = company.CompanyId,
-            PlanType = planType,
+            PlanType = pricing.PlanType,
+            RatePlanId = pricing.RatePlanId,
+            VehicleTypeId = pricing.VehicleTypeId,
             SlotsPurchased = request.AdditionalSlots,
-            RatePerSlot = ratePerSlot,
+            RatePerSlot = pricing.RatePerSlot,
             StartDate = startDate,
             EndDate = endDate,
             DiscountAmount = request.DiscountAmount,
-            VatAmount = request.VatAmount,
-            TotalAmount = total,
+            VatAmount = amount.VatAmount,
+            VatPercent = amount.VatPercent,
+            VatMode = amount.VatMode,
+            TotalAmount = amount.TotalAmount,
             PaidAmount = paid,
             BalanceAmount = balance,
             Status = ParkingConstants.SubscriptionStatus.Active,
@@ -1749,12 +1776,16 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             InvoiceType = "ExtraSlot",
             InvoiceDate = DateTime.Now,
             DueDate = endDate,
-            PlanType = planType,
+            PlanType = pricing.PlanType,
+            RatePlanId = pricing.RatePlanId,
+            VehicleTypeId = pricing.VehicleTypeId,
             Slots = request.AdditionalSlots,
-            SubTotal = subTotal,
+            SubTotal = amount.SubTotal,
             DiscountAmount = request.DiscountAmount,
-            VatAmount = request.VatAmount,
-            TotalAmount = total,
+            VatAmount = amount.VatAmount,
+            VatPercent = amount.VatPercent,
+            VatMode = amount.VatMode,
+            TotalAmount = amount.TotalAmount,
             PaidAmount = paid,
             BalanceAmount = balance,
             Status = GetInvoiceStatus(balance, paid),
@@ -1781,6 +1812,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                 PaymentType = "ExtraSlot",
                 Amount = paid,
                 PaymentMode = NormalizePaymentMode(request.PaymentMode),
+                BankAccountId = await ResolveBankAccountIdAsync(request.PaymentMode, request.BankAccountId, cancellationToken),
                 ReferenceNo = TrimOrNull(request.ReferenceNo),
                 ReceivedBy = request.OperatorId,
                 PaymentDate = DateTime.Now,
@@ -1788,12 +1820,12 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             }, cancellationToken);
         }
 
-        await AddActivityAsync(ParkingConstants.GateActionType.ExtraSlotInvoice, company.CompanyId, null, null, null, "Extra Slot Invoice", $"Added {request.AdditionalSlots} {planType} extra slots.", request.OperatorId, cancellationToken);
+        await AddActivityAsync(ParkingConstants.GateActionType.ExtraSlotInvoice, company.CompanyId, null, null, null, "Extra Slot Invoice", $"Added {request.AdditionalSlots} {pricing.PlanType} extra slots.", request.OperatorId, cancellationToken);
         await ReassignInsideSessionsToActiveSubscriptionsAsync(company.CompanyId, request.OperatorId, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
-        return new ExtraSlotInvoiceResultDto(subscription.SubscriptionId, invoice.InvoiceId, invoice.InvoiceNo, company.CompanyId, request.AdditionalSlots, planType, invoice.TotalAmount, invoice.BalanceAmount, invoice.Status, "Extra slots added and invoice generated.");
+        return new ExtraSlotInvoiceResultDto(subscription.SubscriptionId, invoice.InvoiceId, invoice.InvoiceNo, company.CompanyId, request.AdditionalSlots, pricing.PlanType, invoice.TotalAmount, invoice.BalanceAmount, invoice.Status, "Extra slots added and invoice generated.");
     }
 
 
@@ -2979,7 +3011,11 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                     throw new InvalidOperationException($"Auto-renewal stopped for {company.CompanyName}: too many missing renewal periods. Please renew manually.");
 
                 var nextStart = latest.EndDate.Date.AddDays(1);
-                var nextEnd = CalculateExtraSlotEndDate(latest.PlanType, nextStart);
+                var latestRatePlan = latest.RatePlanId.HasValue
+                    ? await db.ParkingRatePlans.AsNoTracking().FirstOrDefaultAsync(x => x.RatePlanId == latest.RatePlanId.Value, cancellationToken)
+                    : null;
+                var latestPricing = new PricingSelection(latest.PlanType, latest.RatePlanId, latestRatePlan, latest.VehicleTypeId, latest.RatePerSlot);
+                var nextEnd = CalculateSubscriptionEndDate(latestRatePlan, latest.PlanType, nextStart);
                 var exists = await db.ParkingSubscriptions.AnyAsync(x =>
                     x.CompanyId == company.CompanyId &&
                     !x.IsExtraSlot &&
@@ -2992,15 +3028,17 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
                 latest = await CreateSubscriptionInvoiceInternalAsync(
                     company,
-                    latest.PlanType,
+                    latestPricing,
                     latest.SlotsPurchased,
-                    latest.RatePerSlot,
                     nextStart,
                     nextEnd,
                     latest.DiscountAmount,
                     latest.VatAmount,
+                    latest.VatPercent,
+                    latest.VatMode,
                     0,
                     "Credit",
+                    null,
                     null,
                     $"Auto-renewal of subscription #{latest.SubscriptionId}",
                     false,
@@ -4150,6 +4188,141 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
     private static string AppendRemarks(string? current, string addition) =>
         string.IsNullOrWhiteSpace(current) ? addition : current + Environment.NewLine + addition;
 
+    private async Task<PricingSelection> ResolvePricingAsync(
+        Dictionary<string, string> settings,
+        string? requestedPlanType,
+        int? ratePlanId,
+        int? vehicleTypeId,
+        decimal requestedRate,
+        CancellationToken cancellationToken)
+    {
+        ParkingRatePlan? ratePlan = null;
+        if (ratePlanId.HasValue)
+        {
+            ratePlan = await db.ParkingRatePlans.AsNoTracking().FirstOrDefaultAsync(x => x.RatePlanId == ratePlanId.Value, cancellationToken)
+                ?? throw new InvalidOperationException("Selected rate plan was not found.");
+            if (!ratePlan.IsActive)
+                throw new InvalidOperationException("Selected rate plan is inactive.");
+        }
+
+        if (vehicleTypeId.HasValue)
+        {
+            var vehicleTypeExists = await db.ParkingVehicleTypes.AsNoTracking().AnyAsync(x => x.VehicleTypeId == vehicleTypeId.Value && x.IsActive, cancellationToken);
+            if (!vehicleTypeExists)
+                throw new InvalidOperationException("Selected vehicle type was not found or is inactive.");
+        }
+
+        var planType = ratePlan?.PlanName ?? NormalizeExtraSlotPlanType(requestedPlanType);
+        var rate = requestedRate > 0 ? requestedRate : ratePlan?.RatePerSlot ?? GetExtraSlotRate(settings, planType);
+
+        if (ratePlan != null && vehicleTypeId.HasValue)
+        {
+            var mappedRate = await db.ParkingRateVehicleTypeMappings.AsNoTracking()
+                .Where(x => x.RatePlanId == ratePlan.RatePlanId && x.VehicleTypeId == vehicleTypeId.Value && x.IsActive && x.RatePerSlotOverride.HasValue)
+                .Select(x => x.RatePerSlotOverride!.Value)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (mappedRate > 0 && requestedRate <= 0)
+                rate = mappedRate;
+        }
+
+        if (rate <= 0)
+            throw new InvalidOperationException($"{planType} subscription rate is not configured. Please update settings first.");
+
+        return new PricingSelection(planType, ratePlan?.RatePlanId, ratePlan, vehicleTypeId, rate);
+    }
+
+    private async Task<int?> ResolveBankAccountIdAsync(string? paymentMode, int? bankAccountId, CancellationToken cancellationToken)
+    {
+        var normalizedMode = NormalizePaymentMode(paymentMode);
+        var isBank = normalizedMode.Contains("bank", StringComparison.OrdinalIgnoreCase);
+        if (!isBank)
+            return null;
+
+        if (!bankAccountId.HasValue)
+            throw new InvalidOperationException("Bank account is required when payment mode is Bank.");
+
+        var exists = await db.ParkingBankAccounts.AsNoTracking().AnyAsync(x => x.BankAccountId == bankAccountId.Value && x.IsActive, cancellationToken);
+        if (!exists)
+            throw new InvalidOperationException("Selected bank account was not found or is inactive.");
+
+        return bankAccountId.Value;
+    }
+
+    private static InvoiceAmountSelection CalculateInvoiceAmounts(
+        Dictionary<string, string> settings,
+        int slots,
+        decimal ratePerSlot,
+        decimal discountAmount,
+        decimal requestedVatAmount,
+        decimal? requestedVatPercent,
+        string? requestedVatMode)
+    {
+        var grossBeforeDiscount = Math.Max(slots, 0) * Math.Max(ratePerSlot, 0);
+        var discount = Math.Max(discountAmount, 0);
+        var taxableAmount = Math.Max(grossBeforeDiscount - discount, 0);
+        var vatEnabled = GetBoolSetting(settings, "VatEnabled", true);
+
+        if (!vatEnabled)
+            return new InvoiceAmountSelection(grossBeforeDiscount, 0, 0, "Disabled", taxableAmount);
+
+        var hasExplicitVatMetadata = requestedVatPercent.HasValue || !string.IsNullOrWhiteSpace(requestedVatMode);
+        if (!hasExplicitVatMetadata && requestedVatAmount > 0)
+        {
+            var totalWithManualVat = taxableAmount + requestedVatAmount;
+            if (totalWithManualVat < 0)
+                throw new InvalidOperationException("Invoice total cannot be negative.");
+            return new InvoiceAmountSelection(grossBeforeDiscount, requestedVatAmount, 0, "Manual", totalWithManualVat);
+        }
+
+        var vatPercent = requestedVatPercent ?? GetDecimalSetting(settings, "DefaultVatPercent", 5m);
+        if (vatPercent < 0 || vatPercent > 100)
+            throw new InvalidOperationException("VAT percentage must be between 0 and 100.");
+
+        var vatMode = NormalizeVatMode(requestedVatMode ?? GetStringSetting(settings, "DefaultVatMode", "Exclusive"));
+        decimal vatAmount;
+        decimal total;
+        if (vatMode.Equals("Inclusive", StringComparison.OrdinalIgnoreCase))
+        {
+            vatAmount = vatPercent <= 0 ? 0 : taxableAmount * vatPercent / (100 + vatPercent);
+            total = taxableAmount;
+        }
+        else
+        {
+            vatAmount = taxableAmount * vatPercent / 100;
+            total = taxableAmount + vatAmount;
+        }
+
+        vatAmount = Math.Round(vatAmount, 2, MidpointRounding.AwayFromZero);
+        total = Math.Round(total, 2, MidpointRounding.AwayFromZero);
+        if (total < 0)
+            throw new InvalidOperationException("Invoice total cannot be negative.");
+
+        return new InvoiceAmountSelection(grossBeforeDiscount, vatAmount, vatPercent, vatMode, total);
+    }
+
+    private static DateTime CalculateSubscriptionEndDate(ParkingRatePlan? ratePlan, string? planType, DateTime startDate)
+    {
+        if (ratePlan == null)
+            return CalculateExtraSlotEndDate(planType ?? "Daily", startDate);
+
+        var periodValue = Math.Max(ratePlan.PeriodValue, 1);
+        var unit = (ratePlan.PeriodUnit ?? string.Empty).Trim();
+        if (unit.Equals("Years", StringComparison.OrdinalIgnoreCase))
+            return startDate.AddYears(periodValue).AddDays(-1);
+        if (unit.Equals("Months", StringComparison.OrdinalIgnoreCase))
+            return startDate.AddMonths(periodValue).AddDays(-1);
+        return startDate.AddDays(periodValue - 1);
+    }
+
+    private static string NormalizeVatMode(string? value)
+    {
+        var mode = (value ?? string.Empty).Trim();
+        if (mode.Equals("Inclusive", StringComparison.OrdinalIgnoreCase)) return "Inclusive";
+        if (mode.Equals("Disabled", StringComparison.OrdinalIgnoreCase)) return "Disabled";
+        if (mode.Equals("Manual", StringComparison.OrdinalIgnoreCase)) return "Manual";
+        return "Exclusive";
+    }
+
     private static IReadOnlyList<ExtraSlotRateDto> BuildExtraSlotRatePlans(Dictionary<string, string> settings) =>
     [
         new ExtraSlotRateDto("Daily", GetExtraSlotRate(settings, "Daily"), 1, $"Daily - AED {GetExtraSlotRate(settings, "Daily"):n2} per slot"),
@@ -4279,4 +4452,18 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
     private static bool GetBoolSetting(Dictionary<string, string> settings, string key, bool defaultValue) =>
         settings.TryGetValue(key, out var value) && bool.TryParse(value, out var result) ? result : defaultValue;
+
+    private sealed record PricingSelection(
+        string PlanType,
+        int? RatePlanId,
+        ParkingRatePlan? RatePlan,
+        int? VehicleTypeId,
+        decimal RatePerSlot);
+
+    private sealed record InvoiceAmountSelection(
+        decimal SubTotal,
+        decimal VatAmount,
+        decimal VatPercent,
+        string VatMode,
+        decimal TotalAmount);
 }

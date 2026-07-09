@@ -17,6 +17,8 @@ public sealed class ReportQueryDto
     public DateTime? DateTo { get; set; }
     public int? CompanyId { get; set; }
     public string? Status { get; set; }
+    public string? PaymentMode { get; set; }
+    public int? BankAccountId { get; set; }
     public string? Search { get; set; }
     public int PageNumber { get; set; } = 1;
     public int PageSize { get; set; } = 50;
