@@ -21,6 +21,7 @@ public sealed class NetworldParkingDbContext(DbContextOptions<NetworldParkingDbC
     public DbSet<ParkingVehicleType> ParkingVehicleTypes => Set<ParkingVehicleType>();
     public DbSet<ParkingBankAccount> ParkingBankAccounts => Set<ParkingBankAccount>();
     public DbSet<ParkingRateVehicleTypeMapping> ParkingRateVehicleTypeMappings => Set<ParkingRateVehicleTypeMapping>();
+    public DbSet<ParkingSubscriptionVehicleAllocation> ParkingSubscriptionVehicleAllocations => Set<ParkingSubscriptionVehicleAllocation>();
     public DbSet<ParkingSession> ParkingSessions => Set<ParkingSession>();
     public DbSet<GateActivityLog> GateActivityLogs => Set<GateActivityLog>();
     public DbSet<OutsideDisplayEvent> OutsideDisplayEvents => Set<OutsideDisplayEvent>();
@@ -172,6 +173,21 @@ public sealed class NetworldParkingDbContext(DbContextOptions<NetworldParkingDbC
             .HasOne(x => x.VehicleType)
             .WithMany()
             .HasForeignKey(x => x.VehicleTypeId);
+
+        modelBuilder.Entity<ParkingSubscriptionVehicleAllocation>().HasKey(x => x.SubscriptionVehicleAllocationId);
+        modelBuilder.Entity<ParkingSubscriptionVehicleAllocation>().HasIndex(x => new { x.SubscriptionId, x.VehicleTypeId });
+        modelBuilder.Entity<ParkingSubscriptionVehicleAllocation>().Property(x => x.RatePerSlot).HasPrecision(18, 2);
+        modelBuilder.Entity<ParkingSubscriptionVehicleAllocation>().Property(x => x.LineTotal).HasPrecision(18, 2);
+        modelBuilder.Entity<ParkingSubscriptionVehicleAllocation>()
+            .HasOne(x => x.Subscription)
+            .WithMany()
+            .HasForeignKey(x => x.SubscriptionId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<ParkingSubscriptionVehicleAllocation>()
+            .HasOne(x => x.VehicleType)
+            .WithMany()
+            .HasForeignKey(x => x.VehicleTypeId)
+            .OnDelete(DeleteBehavior.NoAction);
 
         modelBuilder.Entity<ParkingSession>().HasKey(x => x.SessionId);
         modelBuilder.Entity<ParkingSession>().HasIndex(x => x.BarcodeNo).IsUnique();

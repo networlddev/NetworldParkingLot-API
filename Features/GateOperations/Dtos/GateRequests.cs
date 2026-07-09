@@ -208,6 +208,7 @@ public sealed class CreateCompanyWithSubscriptionRequest
 
     public int? RatePlanId { get; set; }
     public int? VehicleTypeId { get; set; }
+    public List<SubscriptionVehicleTypeAllocationRequest> VehicleTypeAllocations { get; set; } = [];
 
     [Range(1, 100000)]
     public int SlotsPurchased { get; set; }
@@ -296,6 +297,7 @@ public sealed class CreateSubscriptionRequest
 
     public int? RatePlanId { get; set; }
     public int? VehicleTypeId { get; set; }
+    public List<SubscriptionVehicleTypeAllocationRequest> VehicleTypeAllocations { get; set; } = [];
 
     [Range(1, 100000)]
     public int SlotsPurchased { get; set; }
@@ -325,6 +327,7 @@ public sealed class UpdateSubscriptionRequest
 
     public int? RatePlanId { get; set; }
     public int? VehicleTypeId { get; set; }
+    public List<SubscriptionVehicleTypeAllocationRequest> VehicleTypeAllocations { get; set; } = [];
 
     [Range(1, 100000)]
     public int SlotsPurchased { get; set; }
@@ -351,6 +354,18 @@ public sealed class CancelSubscriptionRequest
     public bool StopAutoRenew { get; set; }
 
     public int OperatorId { get; set; }
+}
+
+public sealed class SubscriptionVehicleTypeAllocationRequest
+{
+    [Range(1, int.MaxValue)]
+    public int VehicleTypeId { get; set; }
+
+    [Range(1, 100000)]
+    public int SlotsPurchased { get; set; }
+
+    [Range(0, double.MaxValue)]
+    public decimal RatePerSlot { get; set; }
 }
 
 public sealed class ClearCancelledSubscriptionBalanceRequest
