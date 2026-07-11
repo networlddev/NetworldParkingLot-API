@@ -74,6 +74,23 @@ Swagger will open at:
 https://localhost:xxxx/swagger
 ```
 
+## Local site databases
+
+For local testing, use the matching API launch profile instead of editing
+`appsettings.json` each time.
+
+```text
+NetworldParkingLot.Api - Ras Al Khor Local -> Parking ras al khor
+NetworldParkingLot.Api - Jabal Ali Local   -> Parking Jabal Ali
+```
+
+PowerShell examples:
+
+```powershell
+dotnet run --launch-profile "NetworldParkingLot.Api - Ras Al Khor Local"
+dotnet run --launch-profile "NetworldParkingLot.Api - Jabal Ali Local"
+```
+
 ## Important API endpoints
 
 ### Gate summary

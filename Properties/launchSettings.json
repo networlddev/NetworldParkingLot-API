@@ -7,6 +7,22 @@
         "ASPNETCORE_ENVIRONMENT": "Development"
       },
       "applicationUrl": "https://localhost:53286;http://localhost:53287"
+    },
+    "NetworldParkingLot.Api - Ras Al Khor Local": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "RasAlKhor.Local"
+      },
+      "applicationUrl": "https://localhost:53286;http://localhost:53287"
+    },
+    "NetworldParkingLot.Api - Jabal Ali Local": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "JabalAli.Local"
+      },
+      "applicationUrl": "https://localhost:53286;http://localhost:53287"
     }
   }
 }
