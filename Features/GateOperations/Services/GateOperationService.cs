@@ -1155,6 +1155,26 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
             .GroupBy(x => x.SubscriptionId!.Value)
             .ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.InvoiceDate).ThenByDescending(y => y.InvoiceId).First());
 
+        var allocationBySubscription = await db.ParkingSubscriptionVehicleAllocations
+            .AsNoTracking()
+            .Include(x => x.VehicleType)
+            .Where(x => subscriptionIds.Contains(x.SubscriptionId))
+            .OrderBy(x => x.SubscriptionVehicleAllocationId)
+            .Select(x => new
+            {
+                x.SubscriptionId,
+                Line = new SubscriptionVehicleAllocationDto(
+                    x.VehicleTypeId,
+                    x.VehicleType == null ? string.Empty : x.VehicleType.VehicleTypeName,
+                    x.SlotsPurchased,
+                    x.RatePerSlot,
+                    x.LineTotal)
+            })
+            .ToListAsync(cancellationToken);
+        var allocationsBySubscription = allocationBySubscription
+            .GroupBy(x => x.SubscriptionId)
+            .ToDictionary(x => x.Key, x => (IReadOnlyList<SubscriptionVehicleAllocationDto>)x.Select(y => y.Line).ToList());
+
         var insideByCompany = await db.ParkingSessions
             .AsNoTracking()
             .Where(x => companyIds.Contains(x.CompanyId) && x.Status == ParkingConstants.SessionStatus.Inside)
@@ -1168,6 +1188,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         foreach (var subscription in subscriptions)
         {
             invoiceBySubscription.TryGetValue(subscription.SubscriptionId, out var invoice);
+            allocationsBySubscription.TryGetValue(subscription.SubscriptionId, out var allocations);
             insideByCompany.TryGetValue(subscription.CompanyId, out var insideCount);
             var displayStatus = GetRuntimeSubscriptionStatus(subscription, today);
             var paymentStatus = invoice == null ? GetInvoiceStatus(subscription.BalanceAmount, subscription.PaidAmount) : invoice.Status;
@@ -1205,7 +1226,8 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
                 UserDisplayName(users, subscription.CreatedBy),
                 UserDisplayName(users, subscription.ModifiedBy),
                 subscription.Remarks,
-                subscription.CancellationReason));
+                subscription.CancellationReason,
+                allocations ?? []));
         }
 
         return ApplySubscriptionListPostFilters(items, request).ToList();

@@ -436,6 +436,13 @@ public sealed record CompanyListItemDto(
     string ModifiedByName);
 
 
+public sealed record SubscriptionVehicleAllocationDto(
+    int VehicleTypeId,
+    string VehicleTypeName,
+    int SlotsPurchased,
+    decimal RatePerSlot,
+    decimal LineTotal);
+
 public sealed record SubscriptionListItemDto(
     int SubscriptionId,
     int CompanyId,
@@ -468,7 +475,8 @@ public sealed record SubscriptionListItemDto(
     string CreatedByName,
     string ModifiedByName,
     string? Remarks,
-    string? CancellationReason);
+    string? CancellationReason,
+    IReadOnlyList<SubscriptionVehicleAllocationDto> VehicleTypeAllocations);
 
 public sealed record CompanyBalanceAdjustmentDto(
     int BalanceAdjustmentId,
