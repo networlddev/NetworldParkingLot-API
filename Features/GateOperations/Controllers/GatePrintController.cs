@@ -310,6 +310,62 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
         }
     }
 
+    [RequireParkingPermission("payments", "print")]
+    [HttpGet("payment-command")]
+    public async Task<ActionResult<ApiResponse<PaymentCommandPrintDto>>> GetPaymentCommand(
+        [FromQuery] int paymentId,
+        [FromQuery] int? copies,
+        [FromQuery] string? printerName,
+        CancellationToken cancellationToken)
+    {
+        if (paymentId <= 0)
+            return BadRequest(ApiResponse<PaymentCommandPrintDto>.Fail("PaymentId is required."));
+
+        var payment = await db.ParkingPayments
+            .AsNoTracking()
+            .Include(x => x.Company)
+            .Include(x => x.BankAccount)
+            .FirstOrDefaultAsync(x => x.PaymentId == paymentId, cancellationToken);
+
+        if (payment == null)
+            return NotFound(ApiResponse<PaymentCommandPrintDto>.Fail("Payment not found."));
+
+        var invoiceNo = payment.InvoiceId.HasValue
+            ? await db.ParkingInvoices
+                .AsNoTracking()
+                .Where(x => x.InvoiceId == payment.InvoiceId.Value)
+                .Select(x => x.InvoiceNo)
+                .FirstOrDefaultAsync(cancellationToken)
+            : null;
+        var barcodeNo = payment.SessionId.HasValue
+            ? await db.ParkingSessions
+                .AsNoTracking()
+                .Where(x => x.SessionId == payment.SessionId.Value)
+                .Select(x => x.BarcodeNo)
+                .FirstOrDefaultAsync(cancellationToken)
+            : null;
+
+        var settings = await db.SystemSettings
+            .AsNoTracking()
+            .ToDictionaryAsync(x => x.SettingKey, x => x.SettingValue, cancellationToken);
+
+        var selectedPrinter = string.IsNullOrWhiteSpace(printerName)
+            ? ReadString(settings, "InvoicePrinterName", string.Empty)
+            : printerName.Trim();
+
+        var selectedCopies = Math.Clamp(copies ?? ReadInt(settings, "InvoicePrintCopies", 1), 1, 5);
+        var command = BuildPaymentReceipt(payment, invoiceNo, barcodeNo, selectedCopies, settings);
+        var dto = new PaymentCommandPrintDto
+        {
+            PaymentId = payment.PaymentId,
+            ReceiptNo = payment.ReceiptNo,
+            PrinterName = selectedPrinter,
+            Command = command
+        };
+
+        return Ok(ApiResponse<PaymentCommandPrintDto>.Ok(dto, "Payment receipt print command generated."));
+    }
+
     private static string Clean(string? value, int maxLength = 32)
     {
         value = string.IsNullOrWhiteSpace(value) ? "-" : value.Trim();
@@ -718,6 +774,8 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
             sb.AppendLine($"Invoice No : {invoice.InvoiceNo}");
             sb.AppendLine($"Date       : {invoice.InvoiceDate:dd-MMM-yyyy HH:mm}");
             sb.AppendLine($"Company    : {Clean(invoice.Company.CompanyName, 28)}");
+            if (!string.IsNullOrWhiteSpace(invoice.Company.Trn))
+                sb.AppendLine($"Customer TRN: {Clean(invoice.Company.Trn, 26)}");
             sb.AppendLine($"Type       : {invoice.InvoiceType}");
             sb.AppendLine($"Plan       : {invoice.PlanType ?? "-"}");
             sb.AppendLine($"Slots      : {invoice.Slots}");
@@ -738,6 +796,60 @@ public sealed class GatePrintController(NetworldParkingDbContext db, IWindowsRaw
             sb.Append("\x1B\x64\x06");      // Feed 6 lines.
             sb.Append("\x1D\x56\x42\x00");  // Feed and cut for ESC/POS printers.
         }
+        return sb.ToString();
+    }
+
+    private static string BuildPaymentReceipt(
+        Domain.Entities.ParkingPayment payment,
+        string? invoiceNo,
+        string? barcodeNo,
+        int copies,
+        Dictionary<string, string> settings)
+    {
+        var sb = new System.Text.StringBuilder();
+        var companyName = Clean(ReadString(settings, "InvoiceCompanyName", "NETWORLD SMART PARKING"), 32);
+        var title = Clean(ReadString(settings, "InvoiceTitle", "PAYMENT RECEIPT"), 32);
+        var address = Clean(ReadString(settings, "InvoiceAddress", string.Empty), 40);
+        var trn = Clean(ReadString(settings, "InvoiceTrn", string.Empty), 30);
+        var currency = Clean(ReadString(settings, "InvoiceCurrency", "AED"), 8);
+        var footer = Clean(ReadString(settings, "InvoiceFooterText", "Thank you"), 38);
+        var safeCopies = Math.Clamp(copies, 1, 5);
+
+        for (var i = 0; i < safeCopies; i++)
+        {
+            sb.AppendLine(companyName);
+            if (!string.IsNullOrWhiteSpace(address) && address != "-") sb.AppendLine(address);
+            if (!string.IsNullOrWhiteSpace(trn) && trn != "-") sb.AppendLine($"TRN: {trn}");
+            sb.AppendLine(title);
+            sb.AppendLine("--------------------------------");
+            sb.AppendLine($"Receipt No: {payment.ReceiptNo}");
+            sb.AppendLine($"Date       : {payment.PaymentDate:dd-MMM-yyyy HH:mm}");
+            sb.AppendLine($"Company    : {Clean(payment.Company.CompanyName, 28)}");
+            if (!string.IsNullOrWhiteSpace(payment.Company.Trn))
+                sb.AppendLine($"Customer TRN: {Clean(payment.Company.Trn, 26)}");
+            if (!string.IsNullOrWhiteSpace(invoiceNo))
+                sb.AppendLine($"Invoice    : {Clean(invoiceNo, 26)}");
+            if (!string.IsNullOrWhiteSpace(barcodeNo))
+                sb.AppendLine($"Barcode    : {Clean(barcodeNo, 26)}");
+            sb.AppendLine($"Type       : {Clean(payment.PaymentType, 20)}");
+            sb.AppendLine($"Mode       : {Clean(payment.PaymentMode, 20)}");
+            if (!string.IsNullOrWhiteSpace(payment.BankAccount?.BankName))
+                sb.AppendLine($"Bank       : {Clean(payment.BankAccount.BankName, 24)}");
+            if (!string.IsNullOrWhiteSpace(payment.ReferenceNo))
+                sb.AppendLine($"Reference  : {Clean(payment.ReferenceNo, 24)}");
+            sb.AppendLine("--------------------------------");
+            sb.AppendLine($"Amount     : {currency} {payment.Amount:n2}");
+            sb.AppendLine("--------------------------------");
+            if (!string.IsNullOrWhiteSpace(payment.Remarks))
+                sb.AppendLine($"Remarks    : {Clean(payment.Remarks, 26)}");
+            sb.AppendLine(footer);
+            sb.AppendLine();
+            sb.AppendLine();
+            sb.AppendLine();
+            sb.Append("\x1B\x64\x06");
+            sb.Append("\x1D\x56\x42\x00");
+        }
+
         return sb.ToString();
     }
 

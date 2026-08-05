@@ -3,7 +3,7 @@
 
     Safe to run multiple times.
     Adds:
-      - Custom rate plans with one period unit at a time: Days, Months, or Years
+      - Custom rate plans with one period unit at a time: Hours, Days, Months, or Years
       - Vehicle type master
       - Optional rate-to-vehicle-type mapping
       - Bank account master
@@ -37,7 +37,7 @@ BEGIN
         ModifiedDate datetime2 NULL,
         ModifiedBy int NULL,
         CONSTRAINT UQ_ParkingRatePlans_PlanName UNIQUE (PlanName),
-        CONSTRAINT CK_ParkingRatePlans_PeriodUnit CHECK (PeriodUnit IN ('Days', 'Months', 'Years')),
+        CONSTRAINT CK_ParkingRatePlans_PeriodUnit CHECK (PeriodUnit IN ('Hours', 'Days', 'Months', 'Years')),
         CONSTRAINT CK_ParkingRatePlans_PeriodValue CHECK (PeriodValue > 0),
         CONSTRAINT CK_ParkingRatePlans_RatePerSlot CHECK (RatePerSlot >= 0)
     );

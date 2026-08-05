@@ -38,6 +38,14 @@ public sealed class InvoiceCommandPrintDto
     public string Command { get; set; } = string.Empty;
 }
 
+public sealed class PaymentCommandPrintDto
+{
+    public int PaymentId { get; set; }
+    public string ReceiptNo { get; set; } = string.Empty;
+    public string PrinterName { get; set; } = string.Empty;
+    public string Command { get; set; } = string.Empty;
+}
+
 public sealed class BarcodeImagePrintDto
 {
     public string BarcodeNo { get; set; } = string.Empty;

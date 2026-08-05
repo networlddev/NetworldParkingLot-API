@@ -653,6 +653,7 @@ public sealed class SettingsService(NetworldParkingDbContext db, ISystemActivity
     private static string NormalizePeriodUnit(string? value)
     {
         var clean = (value ?? string.Empty).Trim();
+        if (clean.Equals("Hours", StringComparison.OrdinalIgnoreCase)) return "Hours";
         if (clean.Equals("Months", StringComparison.OrdinalIgnoreCase)) return "Months";
         if (clean.Equals("Years", StringComparison.OrdinalIgnoreCase)) return "Years";
         return "Days";

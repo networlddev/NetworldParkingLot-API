@@ -26,24 +26,29 @@ public sealed class GateRepository(NetworldParkingDbContext db) : IGateRepositor
 
     public Task<ParkingSubscription?> GetBestActiveSubscriptionAsync(int companyId, CancellationToken cancellationToken = default)
     {
-        var today = DateTime.Today;
+        var now = DateTime.Now;
+        var today = now.Date;
         return db.ParkingSubscriptions
+            .Include(x => x.RatePlan)
             .Where(x => x.CompanyId == companyId &&
                         x.Status == ParkingConstants.SubscriptionStatus.Active &&
-                        x.StartDate.Date <= today &&
-                        x.EndDate.Date >= today)
+                        x.StartDate <= now &&
+                        (x.EndDate >= now ||
+                         ((x.RatePlan == null || x.RatePlan.PeriodUnit != "Hours") && x.EndDate.Date >= today)))
             .OrderBy(x => x.EndDate)
             .FirstOrDefaultAsync(cancellationToken);
     }
 
     public Task<int> GetActiveSlotCountAsync(int companyId, CancellationToken cancellationToken = default)
     {
-        var today = DateTime.Today;
+        var now = DateTime.Now;
+        var today = now.Date;
         return db.ParkingSubscriptions
             .Where(x => x.CompanyId == companyId &&
                         x.Status == ParkingConstants.SubscriptionStatus.Active &&
-                        x.StartDate.Date <= today &&
-                        x.EndDate.Date >= today)
+                        x.StartDate <= now &&
+                        (x.EndDate >= now ||
+                         ((x.RatePlan == null || x.RatePlan.PeriodUnit != "Hours") && x.EndDate.Date >= today)))
             .SumAsync(x => (int?)x.SlotsPurchased, cancellationToken)
             .ContinueWith(x => x.Result ?? 0, cancellationToken);
     }

@@ -148,7 +148,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (duplicateName)
             throw new InvalidOperationException($"Company name {companyName} already exists.");
 
-        var startDate = request.StartDate == default ? DateTime.Today : request.StartDate.Date;
+        var startDate = NormalizeSubscriptionStartDate(pricing.RatePlan, request.StartDate, DateTime.Now);
         var endDate = CalculateSubscriptionEndDate(pricing.RatePlan, pricing.PlanType, startDate);
         var allocations = await ResolveVehicleAllocationsAsync(settings, pricing, request.VehicleTypeAllocations, request.SlotsPurchased, cancellationToken);
         var amount = allocations.Lines.Count > 0
@@ -374,9 +374,9 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (request.SlotsPurchased <= 0)
             throw new InvalidOperationException("Slots purchased must be greater than zero.");
 
-        var startDate = request.StartDate == default ? DateTime.Today : request.StartDate.Date;
-        var endDate = request.EndDate.HasValue && request.EndDate.Value.Date > startDate
-            ? request.EndDate.Value.Date
+        var startDate = NormalizeSubscriptionStartDate(pricing.RatePlan, request.StartDate, DateTime.Now);
+        var endDate = request.EndDate.HasValue && NormalizeSubscriptionEndDate(pricing.RatePlan, request.EndDate.Value) > startDate
+            ? NormalizeSubscriptionEndDate(pricing.RatePlan, request.EndDate.Value)
             : CalculateSubscriptionEndDate(pricing.RatePlan, pricing.PlanType, startDate);
 
         await EnsureRegularSubscriptionDoesNotOverlapAsync(
@@ -448,9 +448,9 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         if (request.SlotsPurchased <= 0)
             throw new InvalidOperationException("Slots purchased must be greater than zero.");
 
-        var startDate = request.StartDate == default ? subscription.StartDate.Date : request.StartDate.Date;
-        var endDate = request.EndDate.HasValue && request.EndDate.Value.Date > startDate
-            ? request.EndDate.Value.Date
+        var startDate = NormalizeSubscriptionStartDate(pricing.RatePlan, request.StartDate, subscription.StartDate);
+        var endDate = request.EndDate.HasValue && NormalizeSubscriptionEndDate(pricing.RatePlan, request.EndDate.Value) > startDate
+            ? NormalizeSubscriptionEndDate(pricing.RatePlan, request.EndDate.Value)
             : CalculateSubscriptionEndDate(pricing.RatePlan, pricing.PlanType, startDate);
         var normalizedStatus = NormalizeSubscriptionStatus(request.Status, startDate, endDate);
         if (normalizedStatus == ParkingConstants.SubscriptionStatus.Inactive)
@@ -724,9 +724,14 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         var renewalRatePlan = renewalRatePlanId.HasValue
             ? await db.ParkingRatePlans.AsNoTracking().FirstOrDefaultAsync(x => x.RatePlanId == renewalRatePlanId.Value, cancellationToken)
             : null;
-        var startDate = request.StartDate?.Date ?? (existing.EndDate.Date >= DateTime.Today ? existing.EndDate.Date.AddDays(1) : DateTime.Today);
-        var endDate = request.EndDate.HasValue && request.EndDate.Value.Date > startDate
-            ? request.EndDate.Value.Date
+        var startFallback = IsHourlyRatePlan(renewalRatePlan)
+            ? (existing.EndDate >= DateTime.Now ? existing.EndDate : DateTime.Now)
+            : (existing.EndDate.Date >= DateTime.Today ? existing.EndDate.Date.AddDays(1) : DateTime.Today);
+        var startDate = request.StartDate.HasValue
+            ? NormalizeSubscriptionStartDate(renewalRatePlan, request.StartDate.Value, startFallback)
+            : startFallback;
+        var endDate = request.EndDate.HasValue && NormalizeSubscriptionEndDate(renewalRatePlan, request.EndDate.Value) > startDate
+            ? NormalizeSubscriptionEndDate(renewalRatePlan, request.EndDate.Value)
             : CalculateSubscriptionEndDate(renewalRatePlan, planType, startDate);
         var hasSlotOverride = request.SlotsPurchased.HasValue && request.SlotsPurchased.Value != existing.SlotsPurchased;
         var renewalAllocations = request.VehicleTypeAllocations.Count > 0
@@ -1781,7 +1786,7 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
         var settings = await repository.GetSettingsAsync(cancellationToken);
         var pricing = await ResolvePricingAsync(settings, request.PlanType, request.RatePlanId, request.VehicleTypeId, request.RatePerSlot, cancellationToken);
 
-        var startDate = request.StartDate == default ? DateTime.Today : request.StartDate.Date;
+        var startDate = NormalizeSubscriptionStartDate(pricing.RatePlan, request.StartDate, DateTime.Now);
         var endDate = CalculateSubscriptionEndDate(pricing.RatePlan, pricing.PlanType, startDate);
 
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
@@ -4550,12 +4555,28 @@ public sealed class GateOperationService(NetworldParkingDbContext db, IGateRepos
 
         var periodValue = Math.Max(ratePlan.PeriodValue, 1);
         var unit = (ratePlan.PeriodUnit ?? string.Empty).Trim();
+        if (unit.Equals("Hours", StringComparison.OrdinalIgnoreCase))
+            return startDate.AddHours(periodValue);
         if (unit.Equals("Years", StringComparison.OrdinalIgnoreCase))
             return startDate.AddYears(periodValue).AddDays(-1);
         if (unit.Equals("Months", StringComparison.OrdinalIgnoreCase))
             return startDate.AddMonths(periodValue).AddDays(-1);
         return startDate.AddDays(periodValue - 1);
     }
+
+    private static DateTime NormalizeSubscriptionStartDate(ParkingRatePlan? ratePlan, DateTime requestedStartDate, DateTime fallback)
+    {
+        if (requestedStartDate == default)
+            return IsHourlyRatePlan(ratePlan) ? fallback : fallback.Date;
+
+        return IsHourlyRatePlan(ratePlan) ? requestedStartDate : requestedStartDate.Date;
+    }
+
+    private static DateTime NormalizeSubscriptionEndDate(ParkingRatePlan? ratePlan, DateTime requestedEndDate) =>
+        IsHourlyRatePlan(ratePlan) ? requestedEndDate : requestedEndDate.Date;
+
+    private static bool IsHourlyRatePlan(ParkingRatePlan? ratePlan) =>
+        ratePlan?.PeriodUnit?.Equals("Hours", StringComparison.OrdinalIgnoreCase) == true;
 
     private static string NormalizeVatMode(string? value)
     {
